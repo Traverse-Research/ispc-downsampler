@@ -1,7 +1,7 @@
-mod ispc;
+pub mod ispc;
 
 pub struct Image<'a> {
-    pixels: &'a mut Vec<u8>,
+    pixels: &'a mut [u8],
     width: u32,
     height: u32,
 }

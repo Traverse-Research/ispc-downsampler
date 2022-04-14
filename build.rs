@@ -3,22 +3,21 @@ fn compile_bindings() {
     use ispc::{TargetISA, TargetOS};
 
     // Compile our ISPC library, this call will exit with EXIT_FAILURE if
-        // compilation fails.
+    // compilation fails.
 
-        let target_os = if cfg!(target_os = "windows") {
-            TargetOS::Windows
-        } else if cfg!(target_os = "linux") {
-            TargetOS::Linux
-        } else if cfg!(target_os = "macos") {
-            TargetOS::Macos
-        } else if cfg!(target_os = "android") {
-            TargetOS::Android
-        } else {
-            panic!("Unsupported platform")
-        };
+    let target_os = if cfg!(target_os = "windows") {
+        TargetOS::Windows
+    } else if cfg!(target_os = "linux") {
+        TargetOS::Linux
+    } else if cfg!(target_os = "macos") {
+        TargetOS::Macos
+    } else if cfg!(target_os = "android") {
+        TargetOS::Android
+    } else {
+        panic!("Unsupported platform")
+    };
 
-
-        ispc_compile::Config::new()
+    ispc_compile::Config::new()
         .file("src/ispc/kernels/lanczos3.ispc")
         .opt_level(2)
         .woff()
@@ -38,8 +37,8 @@ fn compile_bindings() {
 #[cfg(not(feature = "ispc_cmp"))]
 fn compile_bindings() {
     ispc_rt::PackagedModule::new("downsample_ispc")
-            .lib_path("src/ispc")
-            .link();
+        .lib_path("src/ispc")
+        .link();
 }
 
 fn main() {
