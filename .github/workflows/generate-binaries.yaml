@@ -28,7 +28,7 @@ jobs:
         run: | 
           PATH=$PATH:$PWD
           cargo build --features=ispc_cmp
-          cd ./ispc/
+          cd ./src/ispc/
           ls
 
       - uses: actions/upload-artifact@v2
@@ -57,7 +57,7 @@ jobs:
         run: | 
           PATH=$PATH:$PWD
           cargo build --features=ispc_cmp
-          cd ./ispc/
+          cd ./src/ispc/
           ls
 
       - uses: actions/upload-artifact@v2
