@@ -1,6 +1,3 @@
-use ispc_rt;
-#[cfg(feature = "ispc_cmp")]
-use ispc_compile;
 #[cfg(feature = "ispc_cmp")]
 use ispc::{TargetISA, TargetOS};
 
@@ -23,9 +20,9 @@ fn main() {
         .target_os(TargetOS::Windows)
         .out_dir("src/ispc")
         .compile("downsample_ispc");
-    if !cfg!(feature = "ispc_cmp")  {
-        ispc_rt::PackagedModule::new("downsample_ispc")
-        .lib_path("src/ispc")
-        .link();
+    if !cfg!(feature = "ispc_cmp") {
+        ispc_rt::PackagedModule::new("kernel")
+            .lib_path("src/ispc")
+            .link();
     }
 }
