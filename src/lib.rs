@@ -1,13 +1,13 @@
 pub mod ispc;
 
 pub struct Image<'a> {
-    pixels: &'a mut [u8],
+    pixels: &'a [u8],
     width: u32,
     height: u32,
 }
 
 impl<'a> Image<'a> {
-    pub fn new(pixels: &'a mut [u8], width: u32, height: u32) -> Self {
+    pub fn new(pixels: &'a [u8], width: u32, height: u32) -> Self {
         Self {
             pixels,
             width,
@@ -16,7 +16,7 @@ impl<'a> Image<'a> {
     }
 }
 
-pub fn downsample(src: &mut Image, target_width: u32, target_height: u32) -> Vec<u8> {
+pub fn downsample(src: & Image, target_width: u32, target_height: u32) -> Vec<u8> {
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(
@@ -37,7 +37,7 @@ pub fn downsample(src: &mut Image, target_width: u32, target_height: u32) -> Vec
             src.width,
             target_width,
             target_height,
-            src.pixels.as_mut_ptr(),
+            src.pixels.as_ptr(),
             output.as_mut_ptr(),
         )
     }

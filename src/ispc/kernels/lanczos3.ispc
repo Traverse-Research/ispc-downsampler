@@ -73,7 +73,7 @@ static uint8<4> resample_internal(Image src_image, float<2> uv, float<2> invTarg
     return col * 255;
 }
 
-export void resample(uniform uint width, uniform uint height, uniform uint stride, uniform uint target_width, uniform uint target_height, uniform uint8 src_data[], uniform uint8 out_data[]) {
+export void resample(uniform uint width, uniform uint height, uniform uint stride, uniform uint target_width, uniform uint target_height, uniform const uint8 src_data[], uniform uint8 out_data[]) {
     uniform Image src = {src_data, {width, height}};
     uniform Image dst = {out_data, {target_width, target_height}};
     foreach_tiled (y = 0 ... target_height, x = 0 ... target_width) {
