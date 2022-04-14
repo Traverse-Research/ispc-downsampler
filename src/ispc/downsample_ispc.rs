@@ -210,7 +210,7 @@ extern "C" {
         stride: u32,
         target_width: u32,
         target_height: u32,
-        src_data: *mut u8,
+        src_data: *const u8,
         out_data: *mut u8,
     );
 }

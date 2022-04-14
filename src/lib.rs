@@ -16,7 +16,7 @@ impl<'a> Image<'a> {
     }
 }
 
-pub fn downsample(src: & Image, target_width: u32, target_height: u32) -> Vec<u8> {
+pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(
