@@ -7,7 +7,7 @@ pub struct Image<'a> {
 }
 
 impl<'a> Image<'a> {
-    pub fn new(pixels: &'a mut Vec<u8>, width: u32, height: u32) -> Self {
+    pub fn new(pixels: &'a mut [u8], width: u32, height: u32) -> Self {
         Self {
             pixels,
             width,
