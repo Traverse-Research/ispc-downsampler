@@ -11,7 +11,7 @@ fn main() {
     let res = load(Path::new("test_assets/square_test.png"));
     match res {
         LoadResult::Error(str) => panic!("Image loading error: {}", str),
-        LoadResult::ImageU8(mut img) => {
+        LoadResult::ImageU8(img) => {
             assert!(!img.data.is_empty());
 
             let mut corrected = Vec::new();
