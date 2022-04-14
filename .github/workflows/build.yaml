@@ -1,47 +1,46 @@
 name: CI
 
-# Allows you to run this workflow manually from the Actions tab
 on: [push, pull_request]
 
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build-linux:
-    # The type of runner that the job will run on
+  build:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Cargo build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --workspace --all-targets
+
+  fmt:
     runs-on: ubuntu-latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-        # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access igitt
       - uses: actions/checkout@v2
 
-      - name: Cargo build
+      - name: Cargo fmt
         uses: actions-rs/cargo@v1
         with:
-          command: build
-          args: --workspace --all-targets
+          command: fmt
+          args: --all -- --check
 
-  build-macos: 
-    runs-on: macos-latest
+  clippy:
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v2
 
-      - name: Cargo build
+      - name: Cargo clippy
         uses: actions-rs/cargo@v1
         with:
-          command: build
-          args: --workspace --all-targets
-
-  build-windows: 
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: Cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --workspace --all-targets
+          command: clippy
+          args: --workspace --all-targets -- -Dwarnings
