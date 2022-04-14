@@ -31,8 +31,8 @@ jobs:
 
       - uses: actions/upload-artifact@v2
         with: 
-          name: kernel.rs
-          path: src/ispc/downsample.ispc.rs
+          name: downsample_ispc.rs
+          path: src/ispc/downsample_ispc.rs
 
       - uses: actions/upload-artifact@v2
         with: 
@@ -54,7 +54,7 @@ jobs:
       - name: Build binaries        
         run: | 
           PATH=$PATH:$PWD
-          cargo build --features=ispc
+          cargo build --features=ispc_cmp
 
       - uses: actions/upload-artifact@v2
         with: 
