@@ -27,7 +27,7 @@ jobs:
         
         run: | 
           PATH=$PATH:$PWD
-          cargo build --features=ispc_cmp
+          cargo build --features=ispc
           cd ./src/ispc/
           ls
 
@@ -56,7 +56,7 @@ jobs:
       - name: Build binaries        
         run: | 
           PATH=$PATH:$PWD
-          cargo build --features=ispc_cmp
+          cargo build --features=ispc
           cd ./src/ispc/
           ls
 
