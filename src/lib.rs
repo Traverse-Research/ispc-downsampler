@@ -1,7 +1,5 @@
 pub mod ispc;
 
-ispc_rt::ispc_module!(downsample_ispc);
-
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum Format {
     RGB8,
@@ -46,7 +44,7 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
     );
 
     unsafe {
-        downsample_ispc::resample(
+        ispc::downsample_ispc::resample(
             src.width,
             src.height,
             src.width,
