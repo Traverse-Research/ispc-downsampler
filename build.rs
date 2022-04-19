@@ -1,6 +1,6 @@
-#[cfg(feature = "ispc_cmp")]
+#[cfg(feature = "ispc")]
 fn compile_bindings() {
-    use ispc::{TargetISA, TargetOS};
+    use ispc_compile::{TargetISA, TargetOS};
 
     // Compile our ISPC library, this call will exit with EXIT_FAILURE if
     // compilation fails.
@@ -34,7 +34,7 @@ fn compile_bindings() {
         .compile("downsample_ispc");
 }
 
-#[cfg(not(feature = "ispc_cmp"))]
+#[cfg(not(feature = "ispc"))]
 fn compile_bindings() {
     ispc_rt::PackagedModule::new("downsample_ispc")
         .lib_path("src/ispc")

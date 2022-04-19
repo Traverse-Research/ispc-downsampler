@@ -23,13 +23,13 @@ static float lanczos3_filter(float t)
     if (t < 0.0f)
         t = -t;
 
-    if (t < 3.0f)
-        return clean(sinc(t) * sinc(t / 3.0f));
+    if (t < 3.0)
+        return clean(sinc(t) * sinc(t / 3.0));
     else
         return (0.0f);
 }
 struct Image {
-    uint8* data;
+    const uint8* data;
     int<2> size;
 };
 static int<2> uv_to_pixel_id(int<2> image_size, float<2> uv) {
@@ -43,7 +43,7 @@ static float frac(float f) {
     float absf = abs(f);
     return absf - floor(absf);
 }
-static uint8<4> resample_internal(Image src_image, float<2> uv, float<2> invTargetResolution) {
+static uint8<4> resample_internal(Image src_image, float<2> uv, float<2> invTargetResolution, uniform uint8 num_channels) {
 
     float<2> center_pixel = uv / invTargetResolution;
     center_pixel.x = frac(center_pixel.x);
@@ -63,8 +63,8 @@ static uint8<4> resample_internal(Image src_image, float<2> uv, float<2> invTarg
             float<2> texel_uv = center + texel_offset * invTargetResolution;
             int<2> pixel_coord = uv_to_pixel_id(src_image.size, texel_uv);
             float<4> texel;
-            for (int i = 0; i < 4; i++) 
-                texel[i] = (float)src_image.data[(pixel_coord.x + pixel_coord.y * src_image.size.x) * 4 + i] / 255.0f;
+            for (int i = 0; i < num_channels; i++) 
+                texel[i] = (float)src_image.data[(pixel_coord.x + pixel_coord.y * src_image.size.x) * num_channels + i] / 255.0f;
             col += w * texel;
             weight += w;
         }
@@ -73,9 +73,8 @@ static uint8<4> resample_internal(Image src_image, float<2> uv, float<2> invTarg
     return col * 255;
 }
 
-export void resample(uniform uint width, uniform uint height, uniform uint stride, uniform uint target_width, uniform uint target_height, uniform const uint8 src_data[], uniform uint8 out_data[]) {
+export void resample(uniform uint width, uniform uint height, uniform uint stride, uniform uint8 num_channels, uniform uint target_width, uniform uint target_height, uniform const uint8 src_data[], uniform uint8 out_data[]) {
     uniform Image src = {src_data, {width, height}};
-    uniform Image dst = {out_data, {target_width, target_height}};
     foreach_tiled (y = 0 ... target_height, x = 0 ... target_width) {
 
         float yf = y / (float)target_height;
@@ -87,12 +86,8 @@ export void resample(uniform uint width, uniform uint height, uniform uint strid
 
         int<2> dst_pixel_id = uv_to_pixel_id(target_size, uv);
         
-// src.data[x + y * stride]
-        //float r = srgb8_to_float(src.data[x + y * stride]);
-        //float r_filtered = lanczos3_filter(r);
-        //dst.data[x + y * target_width] = (uint8)float_to_srgb8(r_filtered);
-        uint8<4> s = resample_internal(src, uv, 1.0 / target_size);
-        for (int i = 0; i < 4; i++) 
-            dst.data[(x + y * target_width) * 4 + i] = s[i]; 
+        uint8<4> s = resample_internal(src, uv, 1.0 / target_size, num_channels);
+        for (int i = 0; i < num_channels; i++) 
+            out_data[(x + y * target_width) * num_channels + i] = s[i]; 
     }
 }

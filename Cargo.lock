@@ -376,21 +376,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "ispc"
-version = "1.0.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f376557ec85ed715b1971c72a8ffa5b7bccf0710bf59360b4c4bbcd5ed50d66"
-dependencies = [
- "ispc_compile",
- "ispc_rt",
-]
-
-[[package]]
 name = "ispc-downsampler"
 version = "0.1.0"
 dependencies = [
  "image",
- "ispc",
  "ispc_compile",
  "ispc_rt",
  "stb_image",

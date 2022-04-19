@@ -1,5 +1,5 @@
-use image::RgbaImage;
-use ispc_downsampler::{downsample, Image};
+use image::{RgbImage, RgbaImage};
+use ispc_downsampler::{downsample, Format, Image};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
 use std::time::Instant;
@@ -11,18 +11,15 @@ fn main() {
         LoadResult::ImageU8(img) => {
             assert!(!img.data.is_empty());
 
-            let mut corrected = Vec::new();
-            corrected.reserve(img.width * img.height * 4);
-            for i in 0..(img.data.len() / 3) {
-                corrected.push(img.data[i * 3]);
-                corrected.push(img.data[i * 3 + 1]);
-                corrected.push(img.data[i * 3 + 2]);
-                corrected.push(255);
-            }
+            let src_fmt = if img.data.len() / (img.width * img.height) == 4 {
+                Format::RGBA8
+            } else {
+                Format::RGB8
+            };
 
             println!("Loaded image!");
 
-            let mut src_img = Image::new(&mut corrected, img.width as u32, img.height as u32);
+            let mut src_img = Image::new(&img.data, img.width as u32, img.height as u32, src_fmt);
 
             let target_width = (img.width / 4) as u32;
             let target_height = (img.height / 4) as u32;
@@ -38,12 +35,24 @@ fn main() {
             if !std::path::Path::exists(Path::new("example_outputs")) {
                 std::fs::create_dir("example_outputs").unwrap();
             }
-            let mut save_image = RgbaImage::new(target_width, target_height);
-            save_image.copy_from_slice(&downsampled_pixels);
-            save_image
-                .save("example_outputs/square_test_result.png")
-                .unwrap();
+
+            match src_fmt {
+                Format::RGBA8 => {
+                    let mut save_image = RgbaImage::new(target_width, target_height);
+                    save_image.copy_from_slice(&downsampled_pixels);
+                    save_image
+                        .save("example_outputs/square_test_result.png")
+                        .unwrap()
+                }
+                Format::RGB8 => {
+                    let mut save_image = RgbImage::new(target_width, target_height);
+                    save_image.copy_from_slice(&downsampled_pixels);
+                    save_image
+                        .save("example_outputs/square_test_result.png")
+                        .unwrap()
+                }
+            }
         }
-        _ => {}
+        _ => panic!("This test only works with 8-bit per channel textures"),
     }
 }
