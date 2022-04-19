@@ -208,6 +208,7 @@ extern "C" {
         width: u32,
         height: u32,
         stride: u32,
+        num_channels: u8,
         target_width: u32,
         target_height: u32,
         src_data: *const u8,
