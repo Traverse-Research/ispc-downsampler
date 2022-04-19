@@ -40,7 +40,10 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
 
     let mut output = Vec::new();
     // TODO: This and the kernel both assume RGBA8 textures. This will crash and burn with RGB8
-    output.resize((target_width * target_height * src.format.num_channels() as u32) as usize, 0);
+    output.resize(
+        (target_width * target_height * src.format.num_channels() as u32) as usize,
+        0,
+    );
 
     unsafe {
         downsample_ispc::resample(

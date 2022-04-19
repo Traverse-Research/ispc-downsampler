@@ -19,14 +19,14 @@ fn main() {
 
             println!("Loaded image!");
 
-            let mut src_img = Image::new(&img.data, img.width as u32, img.height as u32, src_fmt);
+            let src_img = Image::new(&img.data, img.width as u32, img.height as u32, src_fmt);
 
             let target_width = (img.width / 4) as u32;
             let target_height = (img.height / 4) as u32;
 
             let now = Instant::now();
             println!("Downsampling started!");
-            let downsampled_pixels = downsample(&mut src_img, target_width, target_height);
+            let downsampled_pixels = downsample(&src_img, target_width, target_height);
             println!(
                 "Downsampling done! {} seconds elapsed",
                 now.elapsed().as_millis() as f32 / 1000.0
