@@ -27,26 +27,22 @@ fn main() {
             let now = Instant::now();
             println!("Downsampling started!");
             let downsampled_pixels = downsample(&src_img, target_width, target_height);
-            println!(
-                "Downsampling done! {} seconds elapsed",
-                now.elapsed().as_millis() as f32 / 1000.0
-            );
+            println!("Finished downsampling in {:.2?}!", now.elapsed());
 
-            if !std::path::Path::exists(Path::new("example_outputs")) {
-                std::fs::create_dir("example_outputs").unwrap();
-            }
-
+            std::fs::create_dir_all("example_outputs").unwrap();
             match src_fmt {
                 Format::RGBA8 => {
-                    let mut save_image = RgbaImage::new(target_width, target_height);
-                    save_image.copy_from_slice(&downsampled_pixels);
+                    let save_image =
+                        RgbaImage::from_vec(target_width, target_height, downsampled_pixels)
+                            .unwrap();
                     save_image
                         .save("example_outputs/square_test_result.png")
                         .unwrap()
                 }
                 Format::RGB8 => {
-                    let mut save_image = RgbImage::new(target_width, target_height);
-                    save_image.copy_from_slice(&downsampled_pixels);
+                    let save_image =
+                        RgbImage::from_vec(target_width, target_height, downsampled_pixels)
+                            .unwrap();
                     save_image
                         .save("example_outputs/square_test_result.png")
                         .unwrap()
