@@ -48,7 +48,7 @@ fn main() {
     let downsampled_pixels = downsample(&src_img, target_width, target_height);
     println!("Finished downsampling in {:.2?}!", now.elapsed());
 
-    // Save the downsampler image to an image for comparison
+    // Save the downsampled image to an image for comparison
     std::fs::create_dir_all("example_outputs").unwrap();
     let save_image = RgbaImage::from_vec(target_width, target_height, downsampled_pixels).unwrap();
     save_image
