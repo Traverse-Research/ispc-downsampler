@@ -1,11 +1,15 @@
 # ISPC image downsampler using a Lanczos filter
 [![CI](https://github.com/Traverse-Research/ispc-downsampler/actions/workflows/build.yaml/badge.svg)](https://github.com/Traverse-Research/ispc-downsampler/actions/workflows/build.yaml)
+[![Latest version](https://img.shields.io/crates/v/ispc-downsampler.svg)](https://crates.io/crates/ispc-downsampler)
+[![Docs](https://docs.rs/ispc-downsampler/badge.svg)](https://docs.rs/ispc-downsampler/)
 ![MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![APACHE2](https://img.shields.io/badge/license-APACHE2-blue.svg)
 [![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4%20adopted-ff69b4.svg)](../main/CODE_OF_CONDUCT.md)
 
+[![Banner](banner.png)](https://traverseresearch.nl)
+
 # About
-This crate allows for quick downsampling of images by using ISPC. To preserve image sharpness, a Lanczos filter is used. 
+This crate allows for quick downsampling of images by using ISPC. To preserve image sharpness, a Lanczos filter is used.
 
 The crate downsamples a 2048x2048 image down to 512x512 in ~1.2 seconds, whereas other crates tested took over 4 seconds.
 
