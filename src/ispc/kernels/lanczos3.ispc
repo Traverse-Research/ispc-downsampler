@@ -29,7 +29,7 @@ static inline float lanczos3_filter(float t)
 }
 
 struct Image {
-    uniform const uint8* data;
+    uniform const float* data;
     uniform int<2> size;
 };
 
@@ -77,14 +77,14 @@ static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, u
             float<4> texel;
 
             if (num_channels == 3) {
-                texel.x = byte_to_float(src_image.data[addr + 0]) * inv_255;
-                texel.y = byte_to_float(src_image.data[addr + 1]) * inv_255;
-                texel.z = byte_to_float(src_image.data[addr + 2]) * inv_255;
+                texel.x = src_image.data[addr + 0] * inv_255;
+                texel.y = src_image.data[addr + 1] * inv_255;
+                texel.z = src_image.data[addr + 2] * inv_255;
             } else if (num_channels == 4) {
-                texel.x = byte_to_float(src_image.data[addr + 0]) * inv_255;
-                texel.y = byte_to_float(src_image.data[addr + 1]) * inv_255;
-                texel.z = byte_to_float(src_image.data[addr + 2]) * inv_255;
-                texel.w = byte_to_float(src_image.data[addr + 3]) * inv_255;
+                texel.x = src_image.data[addr + 0] * inv_255;
+                texel.y = src_image.data[addr + 1] * inv_255;
+                texel.z = src_image.data[addr + 2] * inv_255;
+                texel.w = src_image.data[addr + 3] * inv_255;
             }
 
             col += w * texel;
@@ -95,7 +95,18 @@ static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, u
     return col * 255;
 }
 
-export void resample(uniform uint width, uniform uint height, uniform uint stride, uniform uint8 num_channels, uniform uint target_width, uniform uint target_height, uniform const uint8 src_data[], uniform uint8 out_data[]) {
+export void convert_f32(uniform uint width, uniform uint height, uniform uint8 num_channels, uniform const uint8 src_data[], uniform float out_data[]) {
+    //foreach_tiled (y = 0 ... width, x = 0 ... height) {
+    //    int offset = (x + y * width) * num_channels;
+    //    for (uniform int i = 0; i < num_channels; i++)
+
+    uniform uint total = width * height * num_channels;
+    foreach(idx = 0 ... total) {
+        out_data[idx] = byte_to_float(src_data[idx]);
+    }
+}
+
+export void resample(uniform uint width, uniform uint height, uniform uint stride, uniform uint8 num_channels, uniform uint target_width, uniform uint target_height, uniform const float src_data[], uniform uint8 out_data[]) {
     uniform Image src = {src_data, {width, height}};
     uniform float<2> target_size = {(float)target_width, (float)target_height};
     uniform float<2> inv_target_size = {1.0 / target_width, 1.0 / target_height};
