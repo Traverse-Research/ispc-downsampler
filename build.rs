@@ -1,6 +1,6 @@
 #[cfg(feature = "ispc")]
 fn compile_bindings() {
-    use ispc_compile::{TargetISA, TargetOS, MathLib};
+    use ispc_compile::{MathLib, TargetISA, TargetOS};
 
     // Compile our ISPC library, this call will exit with EXIT_FAILURE if
     // compilation fails.
