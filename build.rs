@@ -1,6 +1,6 @@
 #[cfg(feature = "ispc")]
 fn compile_bindings() {
-    use ispc_compile::{TargetISA, TargetOS};
+    use ispc_compile::{TargetISA, TargetOS, MathLib};
 
     // Compile our ISPC library, this call will exit with EXIT_FAILURE if
     // compilation fails.
@@ -30,6 +30,7 @@ fn compile_bindings() {
             TargetISA::AVX512SKXi32x16,
         ])
         .target_os(target_os)
+        .math_lib(MathLib::Fast)
         .out_dir("src/ispc")
         .compile("downsample_ispc");
 }

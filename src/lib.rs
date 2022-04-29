@@ -1,6 +1,6 @@
 pub mod ispc;
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum Format {
     RGB8,
     RGBA8,
