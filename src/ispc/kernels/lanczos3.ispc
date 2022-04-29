@@ -57,10 +57,10 @@ static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, u
     center_pixel.y = frac(center_pixel.y);
     float<2> center = uv - (center_pixel - 0.5) * inv_target_size;
     float<2> offset = (uv - center) * target_size;
+    const float inv_255 = rcp(255.0);
 
     float<4> col = { 0, 0, 0, 0 };
     float weight = 0.0;
-    float inv_255 = rcp(255.0);
 
     for(uniform int x = -3; x < 3; x++){
         for(uniform int y = -3; y < 3; y++){
@@ -97,12 +97,13 @@ static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, u
 
 export void resample(uniform uint width, uniform uint height, uniform uint stride, uniform uint8 num_channels, uniform uint target_width, uniform uint target_height, uniform const uint8 src_data[], uniform uint8 out_data[]) {
     uniform Image src = {src_data, {width, height}};
-    uniform int<2> target_size = {target_width, target_height};
+    uniform float<2> target_size = {(float)target_width, (float)target_height};
     uniform float<2> inv_target_size = {1.0 / target_width, 1.0 / target_height};
 
+
     foreach_tiled (y = 0 ... target_height, x = 0 ... target_width) {
-        float yf = y / (float)target_height;
-        float xf = x / (float)target_width;
+        float yf = y / target_size.y;
+        float xf = x / target_size.x;
 
         float<2> uv = { xf, yf };
 
