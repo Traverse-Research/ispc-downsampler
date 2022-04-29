@@ -28,9 +28,11 @@ pub fn resize_rs(c: &mut Criterion) {
         let target_width = img.width / 4;
         let target_height = img.height / 4;
 
-        let src = img.data.chunks(3).map(|v| {
-            RGB::new(v[0], v[1], v[2])
-        }).collect::<Vec<_>>();
+        let src = img
+            .data
+            .chunks(3)
+            .map(|v| RGB::new(v[0], v[1], v[2]))
+            .collect::<Vec<_>>();
 
         let mut dst = vec![RGB::new(0, 0, 0); target_width * target_height];
 
