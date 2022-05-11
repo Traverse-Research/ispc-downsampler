@@ -5,18 +5,6 @@ fn compile_bindings() {
     // Compile our ISPC library, this call will exit with EXIT_FAILURE if
     // compilation fails.
 
-    let target_os = if cfg!(target_os = "windows") {
-        TargetOS::Windows
-    } else if cfg!(target_os = "linux") {
-        TargetOS::Linux
-    } else if cfg!(target_os = "macos") {
-        TargetOS::Macos
-    } else if cfg!(target_os = "android") {
-        TargetOS::Android
-    } else {
-        panic!("Unsupported platform")
-    };
-
     ispc_compile::Config::new()
         .file("src/ispc/kernels/lanczos3.ispc")
         .opt_level(2)
@@ -29,7 +17,6 @@ fn compile_bindings() {
             TargetISA::AVX512KNLi32x16,
             TargetISA::AVX512SKXi32x16,
         ])
-        .target_os(target_os)
         .math_lib(MathLib::Fast)
         .out_dir("src/ispc")
         .compile("downsample_ispc");
