@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 build = "build.rs"
 license = "MIT/Apache-2.0"
-license-file = "LICENSE"
 description = "Image downsampler crate using ISPC"
 documentation = "https://docs.rs/ispc-downsampler"
 include = [
@@ -12,6 +11,8 @@ include = [
     "/benches/",
     "/examples/",
     "/README.md",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
 ]
 
 [dependencies]
