@@ -9,16 +9,20 @@
 [![Banner](banner.png)](https://traverseresearch.nl)
 
 # About
+
 This crate allows for quick downsampling of images by using ISPC. To preserve image sharpness, a Lanczos filter is used.
 
 The crate downsamples a 2048x2048 image down to 512x512 in ~1.2 seconds, whereas other crates tested took over 4 seconds.
 
-The crate comes with the bindings and precompiled libraries for Windows, Linux and macOS for the ISPC functions, so the ISPC compiler and libclang are not needed unless you are want to rebuild them with different settings. For that, use `cargo build --features=ispc`. This will expect you to have the ISPC compiler in your global PATH variable.
+The crate comes with the bindings and precompiled libraries for Windows, Linux and macOS for the ISPC functions, so the ISPC compiler and `libclang` are not needed unless you are want to rebuild them with different settings. For that, use `cargo build --features=ispc`. This will expect you to have the ISPC compiler in your global `PATH` variable.
 
 ## Usage
+
 Create a new `ispc_downsampler::Image` from a slice of the texture's pixels, the dimensions of the source image, and the format it is in. Currently only works with RGB8 and RGBA8 textures.
 Call `ispc_downsampler::downsample` with the source image, and the target dimension for downsampled image. The function will return a `Vec<u8>` with the pixels of the downsampled image in the same format as the source image.
+
 #### Example
+
 ```rust
 use image::{io::Reader, RgbaImage};
 use ispc_downsampler::{downsample, Format, Image};

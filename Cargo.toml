@@ -13,8 +13,7 @@ include = [
     "/benches/",
     "/examples/",
     "/README.md",
-    "/LICENSE-APACHE",
-    "/LICENSE-MIT",
+    "/LICENSE-*",
 ]
 
 [dependencies]
