@@ -1,11 +1,11 @@
 #[cfg(feature = "ispc")]
 fn compile_bindings() {
-    use ispc_compile::{MathLib, TargetISA, TargetOS};
+    use ispc_compile::{BindgenOptions, Config, MathLib, TargetISA};
 
     // Compile our ISPC library, this call will exit with EXIT_FAILURE if
     // compilation fails.
 
-    ispc_compile::Config::new()
+    Config::new()
         .file("src/ispc/kernels/lanczos3.ispc")
         .opt_level(2)
         .woff()
@@ -18,6 +18,9 @@ fn compile_bindings() {
             TargetISA::AVX512SKXi32x16,
         ])
         .math_lib(MathLib::Fast)
+        .bindgen_options(BindgenOptions {
+            allowlist_functions: vec!["resample".into()],
+        })
         .out_dir("src/ispc")
         .compile("downsample_ispc");
 }
