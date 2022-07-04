@@ -112,3 +112,39 @@ export void resample(uniform uint32 width, uniform uint32 height, uniform uint32
             out_data[(x + y * target_width) * num_channels + i] = s[i];
     }
 }
+
+struct CoefficientVariables {
+    float src_center;
+    uint src_start;
+    uint src_end;
+};
+
+export void calculate_coefficient_variables(uniform uint src, uniform uint target, uniform CoefficientVariables out_variables[]) {
+    float ratio = src / target;
+
+    float filter_radius = ceil(ratio * 3);
+
+    foreach(pixel = 0 ... target) {
+        CoefficientVariables vars;
+        vars.src_center = (pixel + 0.5) * ratio - 0.5;
+        vars.src_start = ceil(vars.src_center - filter_radius);
+        vars.src_start = clamp(vars.src_start, 0, src - 1);
+        vars.src_end = floor(vars.src_center + filter_radius);
+        vars.src_end = clamp(vars.src_start, 0, src - 1);
+        vars.src_end = max(vars.src_end, vars.src_start);
+
+        out_variables[pixel] = vars;
+    }
+}
+
+export void calculate_coefficients(uniform float scale, uniform const CoefficientVariables * uniform vars, uniform float coefficients[]) {
+    float sum = 0.0;
+    foreach(i = vars->src_start ... vars->src_end + 1) {
+        coefficients[i] = lanczos3_filter(((float)i - vars->src_center) / scale);
+        sum += coefficients[i];
+    }
+
+    foreach(i = vars->src_start ... vars->src_end + 1) {
+        coefficients[i] /= sum;
+    }
+}

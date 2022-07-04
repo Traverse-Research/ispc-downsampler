@@ -1,3 +1,6 @@
+use std::f32::consts::PI;
+use ispc::downsample_ispc::CoefficientVariables;
+
 mod ispc;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -62,4 +65,42 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
     }
 
     output
+}
+
+struct CachedCoefficients {
+    start: u32,
+    coefficients: Vec<f32>,
+}
+
+fn calculate_coefficients(src: u32, target: u32) -> Vec<CachedCoefficients> {
+
+    assert!(src > target, "Trying to use downsampler to upsample or perform an operation which will cause no changes");
+
+    let mut variables = vec![CoefficientVariables::default(); target as usize];
+
+    unsafe {
+        ispc::downsample_ispc::calculate_coefficient_variables(src, target, variables.as_mut_ptr());
+    };
+
+    let image_scale = src as f32 / target as f32;
+
+    let mut res = Vec::with_capacity(target as usize);
+
+    for v in variables.iter() {
+
+        let mut coefficients = vec![0.0; (v.src_end - v.src_start + 1) as usize];
+
+        unsafe {
+            ispc::downsample_ispc::calculate_coefficients(image_scale, v as *const _, coefficients.as_mut_ptr());
+        }
+
+        let cached = CachedCoefficients {
+            start: v.src_start,
+            coefficients,
+        };
+
+        res.push(cached);
+    }
+
+    res
 }
