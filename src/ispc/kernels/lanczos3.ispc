@@ -115,23 +115,26 @@ export void resample(uniform uint32 width, uniform uint32 height, uniform uint32
 
 struct CoefficientVariables {
     float src_center;
-    uint src_start;
-    uint src_end;
+    float src_start;
+    float src_end;
 };
 
 export void calculate_coefficient_variables(uniform uint src, uniform uint target, uniform CoefficientVariables out_variables[]) {
-    float ratio = src / target;
+    uniform float ratio = src / target;
 
-    float filter_radius = ceil(ratio * 3);
+    uniform float filter_radius = ceil(ratio * 3);
 
     foreach(pixel = 0 ... target) {
         CoefficientVariables vars;
+
         vars.src_center = (pixel + 0.5) * ratio - 0.5;
-        vars.src_start = ceil(vars.src_center - filter_radius);
-        vars.src_start = clamp(vars.src_start, 0, src - 1);
-        vars.src_end = floor(vars.src_center + filter_radius);
-        vars.src_end = clamp(vars.src_start, 0, src - 1);
-        vars.src_end = max(vars.src_end, vars.src_start);
+
+        float start = ceil(vars.src_center - filter_radius);
+        vars.src_start = min(max(start, 0), src - 1);
+
+        float end = floor(vars.src_center + filter_radius);
+        end = min(max(end, 0), src - 1);
+        vars.src_end = max(end, (float)vars.src_start);
 
         out_variables[pixel] = vars;
     }
@@ -140,11 +143,19 @@ export void calculate_coefficient_variables(uniform uint src, uniform uint targe
 export void calculate_coefficients(uniform float scale, uniform const CoefficientVariables * uniform vars, uniform float coefficients[]) {
     float sum = 0.0;
     foreach(i = vars->src_start ... vars->src_end + 1) {
-        coefficients[i] = lanczos3_filter(((float)i - vars->src_center) / scale);
-        sum += coefficients[i];
+        coefficients[i - vars->src_start] = lanczos3_filter(((float)i - vars->src_center) / scale);
+    }
+
+    for(int i = vars->src_start; i < vars->src_end + 1; i++) {
+        sum += coefficients[i - vars->src_start];
     }
 
     foreach(i = vars->src_start ... vars->src_end + 1) {
-        coefficients[i] /= sum;
+        coefficients[i - vars->src_start] /= sum;
     }
 }
+
+struct Coefficients {
+    uint * uniform coefficient_counts;
+    float** coefficients;
+};

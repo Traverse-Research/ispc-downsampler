@@ -1,4 +1,5 @@
-use std::f32::consts::PI;
+use std::{f32::EPSILON, collections::HashMap, rc::Rc};
+
 use ispc::downsample_ispc::CoefficientVariables;
 
 mod ispc;
@@ -67,12 +68,13 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
     output
 }
 
-struct CachedCoefficients {
-    start: u32,
-    coefficients: Vec<f32>,
+#[derive(Debug)]
+pub struct CachedCoefficients {
+    pub start: u32,
+    pub coefficients: Rc<Vec<f32>>,
 }
 
-fn calculate_coefficients(src: u32, target: u32) -> Vec<CachedCoefficients> {
+pub fn calculate_coefficients(src: u32, target: u32) -> Vec<CachedCoefficients> {
 
     assert!(src > target, "Trying to use downsampler to upsample or perform an operation which will cause no changes");
 
@@ -86,16 +88,29 @@ fn calculate_coefficients(src: u32, target: u32) -> Vec<CachedCoefficients> {
 
     let mut res = Vec::with_capacity(target as usize);
 
+    let mut reuse_heap = HashMap::<_, Rc<Vec<f32>>>::with_capacity(target as usize / 2);
+
     for v in variables.iter() {
 
-        let mut coefficients = vec![0.0; (v.src_end - v.src_start + 1) as usize];
+        let coefficient_count = (v.src_end - v.src_start + 1.0) as u32;
+        let reuse_key = (coefficient_count, (v.src_center - v.src_start).to_ne_bytes());
 
-        unsafe {
-            ispc::downsample_ispc::calculate_coefficients(image_scale, v as *const _, coefficients.as_mut_ptr());
-        }
+        let reused = reuse_heap.get(&reuse_key);
+
+        let coefficients = if let Some(coefficients) = reused {
+            coefficients.clone()
+        } else {
+            let mut coefficients = vec![0.0; coefficient_count as usize];
+            unsafe {
+                ispc::downsample_ispc::calculate_coefficients(image_scale, v as *const _, coefficients.as_mut_ptr());
+            };
+            let coefficients = Rc::new(coefficients);
+            reuse_heap.insert(reuse_key, coefficients.clone());
+            coefficients
+        };
 
         let cached = CachedCoefficients {
-            start: v.src_start,
+            start: v.src_start as u32,
             coefficients,
         };
 
@@ -103,4 +118,33 @@ fn calculate_coefficients(src: u32, target: u32) -> Vec<CachedCoefficients> {
     }
 
     res
+}
+
+#[test]
+fn verify_cached_coefficients() {
+    use resize::{Scale, lanczos};
+    use std::num::NonZeroUsize;
+    use fallible_collections::TryHashMap;
+
+    let ispc_coefficients = calculate_coefficients(2048, 512);
+
+    let mut recycled_coeffs = TryHashMap::with_capacity(512).unwrap();
+    let resize_rs_coefficients = Scale::calc_coeffs(NonZeroUsize::new(2048).unwrap(), 512, (&|x| lanczos(3.0, x), 3.0), &mut recycled_coeffs).unwrap();
+
+    for (index, (ispc, rs)) in ispc_coefficients.iter().zip(resize_rs_coefficients.iter()).enumerate() {
+        let mut same = true;
+        same &= ispc.start == rs.start as u32;
+        same &= ispc.coefficients.len() == rs.coeffs.len();
+
+        for (ispc, rs) in ispc.coefficients.iter().zip(rs.coeffs.iter()) {
+            if ispc - rs > EPSILON {
+                println!("Reeeeeeee");
+                same &= false;
+            }
+        }
+
+        if !same {
+            panic!("Difference found between ispc and resize rs coefficients at index {}.\n ispc: {:?}\n rs: {:?}", index, ispc, rs)
+        }
+    }
 }
