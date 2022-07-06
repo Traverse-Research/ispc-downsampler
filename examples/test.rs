@@ -1,5 +1,5 @@
 use image::{RgbImage, RgbaImage};
-use ispc_downsampler::{downsample, Format, Image, downsample_cached};
+use ispc_downsampler::{downsample_cached, Format, Image};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
 use std::time::Instant;

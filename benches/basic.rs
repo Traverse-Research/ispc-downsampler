@@ -1,9 +1,9 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use ispc_downsampler::{calculate_weights, downsample, Format, Image, downsample_cached};
-use resize::{px::RGB, Type::Lanczos3, Scale, lanczos};
-use stb_image::image::{load, LoadResult};
-use std::{path::Path, num::NonZeroUsize};
 use fallible_collections::TryHashMap;
+use ispc_downsampler::{calculate_weights, downsample_cached, Format, Image};
+use resize::{lanczos, px::RGB, Scale, Type::Lanczos3};
+use stb_image::image::{load, LoadResult};
+use std::{num::NonZeroUsize, path::Path};
 
 const DOWNSCALE: usize = 8;
 
@@ -37,8 +37,7 @@ pub fn resize_rs(c: &mut Criterion) {
             .map(|v| RGB::new(v[0], v[1], v[2]))
             .collect::<Vec<_>>();
 
-
-            c.bench_function("Downsample `square_test.png` using resize", |b| {
+        c.bench_function("Downsample `square_test.png` using resize", |b| {
             b.iter(|| {
                 let mut dst = vec![RGB::new(0, 0, 0); target_width * target_height];
                 let mut resizer = resize::new(
@@ -58,23 +57,28 @@ pub fn resize_rs(c: &mut Criterion) {
 
 pub fn ispc_coefficients(c: &mut Criterion) {
     c.bench_function("Calculate coefficients in ISPC", |b| {
-        b.iter(|| {
-            calculate_weights(2048, 512)
-        })
+        b.iter(|| calculate_weights(2048, 512))
     });
 }
 
 pub fn resize_rs_coefficients(c: &mut Criterion) {
-
     c.bench_function("Calculate coefficients with resize-rs", |b| {
-
         b.iter(|| {
             let mut recycled_coeffs = TryHashMap::with_capacity(512).unwrap();
-            Scale::calc_coeffs(NonZeroUsize::new(2048).unwrap(), 512, (&|x| lanczos(3.0, x), 3.0), &mut recycled_coeffs)
+            Scale::calc_coeffs(
+                NonZeroUsize::new(2048).unwrap(),
+                512,
+                (&|x| lanczos(3.0, x), 3.0),
+                &mut recycled_coeffs,
+            )
         })
     });
 }
 
 criterion_group!(benches, ispc_downsampler, resize_rs);
-criterion_group!(coefficient_benches, ispc_coefficients, resize_rs_coefficients);
+criterion_group!(
+    coefficient_benches,
+    ispc_coefficients,
+    resize_rs_coefficients
+);
 criterion_main!(benches);

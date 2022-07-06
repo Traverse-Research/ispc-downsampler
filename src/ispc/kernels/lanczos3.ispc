@@ -209,10 +209,6 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
         color.z = clamp(color.z, 0.0f, 255.0f);
 
          *scratch_pixel_ptr = color;
-        // for (uint c = 0; c < num_channels; c++) {
-            // float ch = clamp(color[c], 0.0f, 255.0f);
-            // scratch_space[scratch_write_address + c] = ch;
-        // }
     }
 
     // Accumulate the scratch space data along the height
@@ -241,9 +237,5 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
         uint64 out_write_address = (y * target_height + x) * num_channels;
         uint8<3>* varying out_pixel_ptr = (uint8<3>* varying)(out_data + out_write_address);
         *out_pixel_ptr = color;
-        //for (uint c = 0; c < num_channels; c++) {
-        //    float ch = clamp(color[c], 0.0f, 255.0f);
-        //    out_data[out_write_address + c] = ch;
-        //}
     }
 }
