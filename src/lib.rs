@@ -125,20 +125,13 @@ pub fn downsample_cached(src: &Image, target_width: u32, target_height: u32) -> 
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
 
-
-    let now = std::time::Instant::now();
-    println!("Weight calculation started!");
     let width_weights = WeightCollection::new(calculate_weights(src.width, target_width));
     let height_weights = if src.width == src.height && target_width == target_height {
         width_weights.clone()
     } else {
         WeightCollection::new(calculate_weights(src.height, target_height))
     };
-    println!("Weight calculation finished in {:.2?}!", now.elapsed());
 
-
-    let now = std::time::Instant::now();
-    println!("Allocation started!");
     let mut scratch_space = Vec::new();
     scratch_space.resize((src.height * target_width * src.format.num_channels() as u32) as usize, 0u8);
 
@@ -147,14 +140,11 @@ pub fn downsample_cached(src: &Image, target_width: u32, target_height: u32) -> 
         (target_width * target_height * src.format.num_channels() as u32) as usize,
         0,
     );
-    println!("Allocation finished in {:.2?}!", now.elapsed());
 
     let weight_cache = Cache {
         vertical_weights: width_weights.ispc_representation(),
         horizontal_weights: height_weights.ispc_representation(),
     };
-    let now = std::time::Instant::now();
-    println!("Cached downsampling started!");
     unsafe {
         ispc::downsample_ispc::resample_with_cache(
             src.width,
@@ -168,7 +158,6 @@ pub fn downsample_cached(src: &Image, target_width: u32, target_height: u32) -> 
             output.as_mut_ptr(),
         )
     }
-    println!("Cached downsampling finished in {:.2?}!", now.elapsed());
 
     output
 }
@@ -194,10 +183,6 @@ fn verify_cached_coefficients() {
             if ispc - rs > EPSILON {
                 correct &= false;
             }
-        }
-        let sum = ispc.coefficients.iter().copied().sum::<f32>();
-        if (sum - 1.0).abs() > EPSILON * 10.0 {
-            panic!("Reeeeeee {}", sum);
         }
 
         if !correct {
