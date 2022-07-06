@@ -170,11 +170,29 @@ struct Cache {
     uniform WeightCollection horizontal_weights;
 };
 
+uint8<4> sample_3_channels(varying uint64 read_address, const uniform uint8* varying src) {
+    const uniform uint8* pixel_ptr = src + read_address;
+    const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
+    varying uint8<4> dst = {0, 0, 0, 0};
+    varying uint8<3>* varying dst_ptr = (varying uint8<3>* varying)&dst;
+    *dst_ptr = *pixel_ptr3;
+    return dst;
+}
+
+void clean_and_write_3_channels(varying float<4> color, varying write_address, uniform uint8* varying dst) {
+    color.x = clamp(color.x, 0.0f, 255.0f);
+    color.y = clamp(color.y, 0.0f, 255.0f);
+    color.z = clamp(color.z, 0.0f, 255.0f);
+
+    uniform uint8* pixel_ptr = dst + write_address;
+    uniform uint8<3>* pixel_ptr3 = (uniform uint8<3>*)(pixel_ptr);
+    varying float<3>* varying col_ptr3 = (varying float<3>* varying)&color;
+    *pixel_ptr3 = *col_ptr3;
+}
+
 /// scratch_space must be at least src_height * target_width pixels big
 export void resample_with_cache(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height, uniform uint8 num_channels,
     uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
-
-    float inv_255 = rcp(255.0f);
 
     uniform WeightCollection * uniform vertical_weight_collection = &cache->vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = &cache->horizontal_weights;
@@ -186,29 +204,18 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
         uint num_horizontal_weights = horizontal_weight_collection->weight_counts[x];
         float* horizontal_weights = horizontal_weight_collection->values[x];
 
-        float<3> color = {0.0f, 0.0f, 0.0f};
+        float<4> color = {0.0f, 0.0f, 0.0f, 0.0f};
         for (uint i = 0; i < num_horizontal_weights; i++) {
             float weight = horizontal_weights[i];
             uint src_x = src_width_start + i;
             uint64 src_read_address = (y * src_width + src_x) * num_channels;
 
-            uniform uint8* varying src_pixel_ptr = src_data + src_read_address;
-            uint8<3> src_color;
-            src_color = *((uniform const uint8<3>*)(src_pixel_ptr));
-
-            float<3> src_color_float = (float<3>)src_color;
-            color += src_color_float * weight;
+            color += sample_3_channels(src_read_address, src_data) * weight;
         }
 
         uint64 scratch_write_address = (y * target_width + x) * num_channels;
 
-        uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space +scratch_write_address);
-
-        color.x = clamp(color.x, 0.0f, 255.0f);
-        color.y = clamp(color.y, 0.0f, 255.0f);
-        color.z = clamp(color.z, 0.0f, 255.0f);
-
-         *scratch_pixel_ptr = color;
+        clean_and_write_3_channels(color, scratch_write_address, scratch_space);
     }
 
     // Accumulate the scratch space data along the height
@@ -219,7 +226,7 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
         uint num_vertical_weights = vertical_weight_collection->weight_counts[y];
         float* vertical_weights = vertical_weight_collection->values[y];
 
-        float<3> color = {0.0f, 0.0f, 0.0f};
+        float<4> color = {0.0f, 0.0f, 0.0f, 0.0f};
         for (uint i = 0; i < num_vertical_weights; i++) {
             float weight = vertical_weights[i];
             uint scratch_y = src_height_start + i;
@@ -228,14 +235,10 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
             uniform uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space + scratch_read_address);
             uint8<3> scratch_color = *scratch_pixel_ptr;
 
-            color += scratch_color * weight;
+            color += sample_3_channels(scratch_read_address, scratch_space) * weight;
         }
 
-        color.x = clamp(color.x, 0.0f, 255.0f);
-        color.y = clamp(color.y, 0.0f, 255.0f);
-        color.z = clamp(color.z, 0.0f, 255.0f);
         uint64 out_write_address = (y * target_height + x) * num_channels;
-        uint8<3>* varying out_pixel_ptr = (uint8<3>* varying)(out_data + out_write_address);
-        *out_pixel_ptr = color;
+        clean_and_write_3_channels(color, out_write_address, out_data);
     }
 }
