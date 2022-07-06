@@ -1,10 +1,11 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use ispc_downsampler::{calculate_weights, downsample, Format, Image};
+use ispc_downsampler::{calculate_weights, downsample, Format, Image, downsample_cached};
 use resize::{px::RGB, Type::Lanczos3, Scale, lanczos};
 use stb_image::image::{load, LoadResult};
 use std::{path::Path, num::NonZeroUsize};
 use fallible_collections::TryHashMap;
 
+const DOWNSCALE: usize = 8;
 
 pub fn ispc_downsampler(c: &mut Criterion) {
     if let LoadResult::ImageU8(img) = load(Path::new("test_assets/square_test.png")) {
@@ -16,19 +17,19 @@ pub fn ispc_downsampler(c: &mut Criterion) {
 
         let src_img = Image::new(&img.data, img.width as u32, img.height as u32, src_fmt);
 
-        let target_width = (img.width / 4) as u32;
-        let target_height = (img.height / 4) as u32;
+        let target_width = (img.width / DOWNSCALE) as u32;
+        let target_height = (img.height / DOWNSCALE) as u32;
 
         c.bench_function("Downsample `square_test.png` using ispc_downsampler", |b| {
-            b.iter(|| downsample(&src_img, target_width, target_height))
+            b.iter(|| downsample_cached(&src_img, target_width, target_height))
         });
     }
 }
 
 pub fn resize_rs(c: &mut Criterion) {
     if let LoadResult::ImageU8(img) = load(Path::new("test_assets/square_test.png")) {
-        let target_width = img.width / 4;
-        let target_height = img.height / 4;
+        let target_width = img.width / DOWNSCALE;
+        let target_height = img.height / DOWNSCALE;
 
         let src = img
             .data
@@ -76,4 +77,4 @@ pub fn resize_rs_coefficients(c: &mut Criterion) {
 
 criterion_group!(benches, ispc_downsampler, resize_rs);
 criterion_group!(coefficient_benches, ispc_coefficients, resize_rs_coefficients);
-criterion_main!(coefficient_benches);
+criterion_main!(benches);

@@ -21,8 +21,8 @@ fn main() {
 
             let src_img = Image::new(&img.data, img.width as u32, img.height as u32, src_fmt);
 
-            let target_width = (img.width / 4) as u32;
-            let target_height = (img.height / 4) as u32;
+            let target_width = (img.width / 2) as u32;
+            let target_height = (img.height / 2) as u32;
 
             let now = Instant::now();
             println!("Downsampling started!");
@@ -33,7 +33,7 @@ fn main() {
             match src_fmt {
                 Format::RGBA8 => {
                     let save_image =
-                        RgbaImage::from_vec(target_width, target_height as u32, downsampled_pixels)
+                        RgbaImage::from_vec(target_width, target_height, downsampled_pixels)
                             .unwrap();
                     save_image
                         .save("example_outputs/square_test_result_cache.png")
@@ -41,7 +41,7 @@ fn main() {
                 }
                 Format::RGB8 => {
                     let save_image =
-                        RgbImage::from_vec(target_width, target_height as u32, downsampled_pixels)
+                        RgbImage::from_vec(target_width, target_height, downsampled_pixels)
                             .unwrap();
                     save_image
                         .save("example_outputs/square_test_result_cache.png")
