@@ -190,6 +190,25 @@ void clean_and_write_3_channels(varying float<4> color, varying write_address, u
     *pixel_ptr3 = *col_ptr3;
 }
 
+uint8<4> sample_4_channels(varying uint64 read_address, const uniform uint8* varying src) {
+    const uniform uint8* pixel_ptr = src + read_address;
+    const uniform uint8<4>* pixel_ptr4 = (const uniform uint8<4>*)(pixel_ptr);
+    varying uint8<4> dst = {0, 0, 0, 0};
+    dst = *pixel_ptr4;
+    return dst;
+}
+
+void clean_and_write_4_channels(varying float<4> color, varying write_address, uniform uint8* varying dst) {
+    color.x = clamp(color.x, 0.0f, 255.0f);
+    color.y = clamp(color.y, 0.0f, 255.0f);
+    color.z = clamp(color.z, 0.0f, 255.0f);
+    color.w = clamp(color.w, 0.0f, 255.0f);
+
+    uniform uint8* pixel_ptr = dst + write_address;
+    uniform uint8<4>* pixel_ptr4 = (uniform uint8<4>*)(pixel_ptr);
+    *pixel_ptr4 = color;
+}
+
 /// scratch_space must be at least src_height * target_width pixels big
 export void resample_with_cache(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height, uniform uint8 num_channels,
     uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
