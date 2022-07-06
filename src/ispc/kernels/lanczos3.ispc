@@ -95,11 +95,10 @@ static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, u
     return col * 255;
 }
 
-export void resample(uniform uint width, uniform uint height, uniform uint stride, uniform uint8 num_channels, uniform uint target_width, uniform uint target_height, uniform const uint8 src_data[], uniform uint8 out_data[]) {
+export void resample(uniform uint32 width, uniform uint32 height, uniform uint32 stride, uniform uint8 num_channels, uniform uint32 target_width, uniform uint32 target_height, uniform const uint8 src_data[], uniform uint8 out_data[]) {
     uniform Image src = {src_data, {width, height}};
     uniform float<2> target_size = {(float)target_width, (float)target_height};
     uniform float<2> inv_target_size = {1.0 / target_width, 1.0 / target_height};
-
 
     foreach_tiled (y = 0 ... target_height, x = 0 ... target_width) {
         float yf = y / target_size.y;
