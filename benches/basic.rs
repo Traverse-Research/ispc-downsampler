@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use ispc_downsampler::{calculate_coefficients, downsample, Format, Image};
+use ispc_downsampler::{calculate_weights, downsample, Format, Image};
 use resize::{px::RGB, Type::Lanczos3, Scale, lanczos};
 use stb_image::image::{load, LoadResult};
 use std::{path::Path, num::NonZeroUsize};
@@ -36,10 +36,10 @@ pub fn resize_rs(c: &mut Criterion) {
             .map(|v| RGB::new(v[0], v[1], v[2]))
             .collect::<Vec<_>>();
 
-        let mut dst = vec![RGB::new(0, 0, 0); target_width * target_height];
 
-        c.bench_function("Downsample `square_test.png` using resize", |b| {
+            c.bench_function("Downsample `square_test.png` using resize", |b| {
             b.iter(|| {
+                let mut dst = vec![RGB::new(0, 0, 0); target_width * target_height];
                 let mut resizer = resize::new(
                     img.width,
                     img.height,
@@ -58,7 +58,7 @@ pub fn resize_rs(c: &mut Criterion) {
 pub fn ispc_coefficients(c: &mut Criterion) {
     c.bench_function("Calculate coefficients in ISPC", |b| {
         b.iter(|| {
-            calculate_coefficients(2048, 512)
+            calculate_weights(2048, 512)
         })
     });
 }

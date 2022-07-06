@@ -113,19 +113,19 @@ export void resample(uniform uint32 width, uniform uint32 height, uniform uint32
     }
 }
 
-struct CoefficientVariables {
+struct WeightVariables {
     float src_center;
     float src_start;
     float src_end;
 };
 
-export void calculate_coefficient_variables(uniform uint src, uniform uint target, uniform CoefficientVariables out_variables[]) {
+export void calculate_weight_variables(uniform uint src, uniform uint target, uniform WeightVariables out_variables[]) {
     uniform float ratio = src / target;
 
     uniform float filter_radius = ceil(ratio * 3);
 
     foreach(pixel = 0 ... target) {
-        CoefficientVariables vars;
+        WeightVariables vars;
 
         vars.src_center = (pixel + 0.5) * ratio - 0.5;
 
@@ -140,22 +140,102 @@ export void calculate_coefficient_variables(uniform uint src, uniform uint targe
     }
 }
 
-export void calculate_coefficients(uniform float scale, uniform const CoefficientVariables * uniform vars, uniform float coefficients[]) {
+export void calculate_weights(uniform float scale, uniform const WeightVariables * uniform vars, uniform float * uniform weights) {
+
+    uniform float start = vars->src_start;
+    uniform float end = vars->src_end;
+    uniform float center = vars->src_center;
+
+    foreach(i = 0 ... end - start + 1) {
+        weights[i] = lanczos3_filter((start + (float)i - center) / scale);
+    }
     float sum = 0.0;
-    foreach(i = vars->src_start ... vars->src_end + 1) {
-        coefficients[i - vars->src_start] = lanczos3_filter(((float)i - vars->src_center) / scale);
+    for(int i = 0; i < end - start + 1; i++) {
+        sum += weights[i];
     }
 
-    for(int i = vars->src_start; i < vars->src_end + 1; i++) {
-        sum += coefficients[i - vars->src_start];
-    }
-
-    foreach(i = vars->src_start ... vars->src_end + 1) {
-        coefficients[i - vars->src_start] /= sum;
+    foreach(i = 0 ... end - start + 1) {
+        weights[i] /= sum;
     }
 }
 
-struct Coefficients {
-    uint * uniform coefficient_counts;
-    float** coefficients;
+struct WeightCollection {
+    uniform const uint* starts;
+    uniform const uint* weight_counts;
+    uniform const float* const* values;
 };
+
+struct Cache {
+    uniform WeightCollection vertical_weights;
+    uniform WeightCollection horizontal_weights;
+};
+
+/// scratch_space must be at least src_height * target_width pixels big
+export void resample_with_cache(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height, uniform uint8 num_channels,
+    uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
+
+    float inv_255 = rcp(255.0f);
+
+    uniform WeightCollection * uniform vertical_weight_collection = &cache->vertical_weights;
+    uniform WeightCollection * uniform horizontal_weight_collection = &cache->horizontal_weights;
+
+    // Accumulate only along the width for each pixel, sampling from the source image
+    // Results in the source image being downsampled to src_height X target_width
+    foreach_tiled(y =  0 ... src_height, x = 0 ... target_width) {
+        uint src_width_start = horizontal_weight_collection->starts[x];
+        uint num_horizontal_weights = horizontal_weight_collection->weight_counts[x];
+        float* horizontal_weights = horizontal_weight_collection->values[x];
+
+        float<4> color = {0.0f, 0.0f, 0.0f, 0.0f};
+        for (uint i = 0; i < num_horizontal_weights; i++) {
+            float weight = horizontal_weights[i];
+            uint src_x = src_width_start + i;
+            uint64 src_read_address = (y * src_width + src_x) * num_channels;
+
+            uint8<4> src_color;
+            for (uint c = 0; c < num_channels; c++) {
+                src_color[c] = src_data[src_read_address + c];
+            };
+
+            float<4> src_color_float = (float<4>)src_color;
+            color += src_color_float * weight;
+        }
+
+        uint64 scratch_write_address = (y * target_width + x) * num_channels;
+
+        for (uint c = 0; c < num_channels; c++) {
+            float ch = clamp(color[c], 0.0f, 255.0f);
+            scratch_space[scratch_write_address + c] = ch;
+        }
+
+    }
+
+    // Accumulate the scratch space data along the height
+    // Downsamples the src_height X target_width image to target_height * target_width
+    foreach_tiled(y =  0 ... target_height, x = 0 ... target_width) {
+
+        uint src_height_start = vertical_weight_collection->starts[y];
+        uint num_vertical_weights = vertical_weight_collection->weight_counts[y];
+        float* vertical_weights = vertical_weight_collection->values[y];
+
+        float<4> color = {0.0f, 0.0f, 0.0f, 0.0f};
+        for (uint i = 0; i < num_vertical_weights; i++) {
+            float weight = vertical_weights[i];
+            uint scratch_y = src_height_start + i;
+            uint64 scratch_read_address = (scratch_y * target_width + x) * num_channels;
+
+            uint8<4> scratch_color;
+            for (uint c = 0; c < num_channels; c++) {
+                scratch_color[c] = scratch_space[scratch_read_address + c];
+            }
+
+            color += (float<4>)scratch_color * weight;
+        }
+
+        uint64 out_write_address = (y * target_height + x) * num_channels;
+        for (uint c = 0; c < num_channels; c++) {
+            float ch = clamp(color[c], 0.0f, 255.0f);
+            out_data[out_write_address + c] = ch;
+        }
+    }
+}

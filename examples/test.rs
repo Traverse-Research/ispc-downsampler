@@ -1,5 +1,5 @@
 use image::{RgbImage, RgbaImage};
-use ispc_downsampler::{downsample, Format, Image};
+use ispc_downsampler::{downsample, Format, Image, downsample_cached};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
 use std::time::Instant;
@@ -26,25 +26,25 @@ fn main() {
 
             let now = Instant::now();
             println!("Downsampling started!");
-            let downsampled_pixels = downsample(&src_img, target_width, target_height);
+            let downsampled_pixels = downsample_cached(&src_img, target_width, target_height);
             println!("Finished downsampling in {:.2?}!", now.elapsed());
 
             std::fs::create_dir_all("example_outputs").unwrap();
             match src_fmt {
                 Format::RGBA8 => {
                     let save_image =
-                        RgbaImage::from_vec(target_width, target_height, downsampled_pixels)
+                        RgbaImage::from_vec(target_width, target_height as u32, downsampled_pixels)
                             .unwrap();
                     save_image
-                        .save("example_outputs/square_test_result.png")
+                        .save("example_outputs/square_test_result_cache.png")
                         .unwrap()
                 }
                 Format::RGB8 => {
                     let save_image =
-                        RgbImage::from_vec(target_width, target_height, downsampled_pixels)
+                        RgbImage::from_vec(target_width, target_height as u32, downsampled_pixels)
                             .unwrap();
                     save_image
-                        .save("example_outputs/square_test_result.png")
+                        .save("example_outputs/square_test_result_cache.png")
                         .unwrap()
                 }
             }

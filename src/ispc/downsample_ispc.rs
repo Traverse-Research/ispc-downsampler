@@ -60,67 +60,148 @@ pub type intmax_t = ::std::os::raw::c_longlong;
 pub type uintmax_t = ::std::os::raw::c_ulonglong;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub struct CoefficientVariables {
+pub struct WeightVariables {
     pub src_center: f32,
     pub src_start: u32,
     pub src_end: u32,
 }
 #[test]
-fn bindgen_test_layout_CoefficientVariables() {
+fn bindgen_test_layout_WeightVariables() {
     assert_eq!(
-        ::std::mem::size_of::<CoefficientVariables>(),
+        ::std::mem::size_of::<WeightVariables>(),
         12usize,
-        concat!("Size of: ", stringify!(CoefficientVariables))
+        concat!("Size of: ", stringify!(WeightVariables))
     );
     assert_eq!(
-        ::std::mem::align_of::<CoefficientVariables>(),
+        ::std::mem::align_of::<WeightVariables>(),
         4usize,
-        concat!("Alignment of ", stringify!(CoefficientVariables))
+        concat!("Alignment of ", stringify!(WeightVariables))
     );
     assert_eq!(
-        unsafe { &(*(::std::ptr::null::<CoefficientVariables>())).src_center as *const _ as usize },
+        unsafe { &(*(::std::ptr::null::<WeightVariables>())).src_center as *const _ as usize },
         0usize,
         concat!(
             "Offset of field: ",
-            stringify!(CoefficientVariables),
+            stringify!(WeightVariables),
             "::",
             stringify!(src_center)
         )
     );
     assert_eq!(
-        unsafe { &(*(::std::ptr::null::<CoefficientVariables>())).src_start as *const _ as usize },
+        unsafe { &(*(::std::ptr::null::<WeightVariables>())).src_start as *const _ as usize },
         4usize,
         concat!(
             "Offset of field: ",
-            stringify!(CoefficientVariables),
+            stringify!(WeightVariables),
             "::",
             stringify!(src_start)
         )
     );
     assert_eq!(
-        unsafe { &(*(::std::ptr::null::<CoefficientVariables>())).src_end as *const _ as usize },
+        unsafe { &(*(::std::ptr::null::<WeightVariables>())).src_end as *const _ as usize },
         8usize,
         concat!(
             "Offset of field: ",
-            stringify!(CoefficientVariables),
+            stringify!(WeightVariables),
             "::",
             stringify!(src_end)
         )
     );
 }
-extern "C" {
-    pub fn calculate_coefficient_variables(
-        src: u32,
-        target: u32,
-        out_variables: *mut CoefficientVariables,
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct WeightCollection {
+    pub starts: *const u32,
+    pub weight_counts: *const u32,
+    pub values: *const *const f32,
+}
+#[test]
+fn bindgen_test_layout_WeightCollection() {
+    assert_eq!(
+        ::std::mem::size_of::<WeightCollection>(),
+        24usize,
+        concat!("Size of: ", stringify!(WeightCollection))
+    );
+    assert_eq!(
+        ::std::mem::align_of::<WeightCollection>(),
+        8usize,
+        concat!("Alignment of ", stringify!(WeightCollection))
+    );
+    assert_eq!(
+        unsafe { &(*(::std::ptr::null::<WeightCollection>())).starts as *const _ as usize },
+        0usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(WeightCollection),
+            "::",
+            stringify!(starts)
+        )
+    );
+    assert_eq!(
+        unsafe { &(*(::std::ptr::null::<WeightCollection>())).weight_counts as *const _ as usize },
+        8usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(WeightCollection),
+            "::",
+            stringify!(weight_counts)
+        )
+    );
+    assert_eq!(
+        unsafe { &(*(::std::ptr::null::<WeightCollection>())).values as *const _ as usize },
+        16usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(WeightCollection),
+            "::",
+            stringify!(values)
+        )
+    );
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct Cache {
+    pub vertical_weights: WeightCollection,
+    pub horizontal_weights: WeightCollection,
+}
+#[test]
+fn bindgen_test_layout_Cache() {
+    assert_eq!(
+        ::std::mem::size_of::<Cache>(),
+        48usize,
+        concat!("Size of: ", stringify!(Cache))
+    );
+    assert_eq!(
+        ::std::mem::align_of::<Cache>(),
+        8usize,
+        concat!("Alignment of ", stringify!(Cache))
+    );
+    assert_eq!(
+        unsafe { &(*(::std::ptr::null::<Cache>())).vertical_weights as *const _ as usize },
+        0usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(Cache),
+            "::",
+            stringify!(vertical_weights)
+        )
+    );
+    assert_eq!(
+        unsafe { &(*(::std::ptr::null::<Cache>())).horizontal_weights as *const _ as usize },
+        24usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(Cache),
+            "::",
+            stringify!(horizontal_weights)
+        )
     );
 }
 extern "C" {
-    pub fn calculate_coefficients(
-        scale: f32,
-        vars: *const CoefficientVariables,
-        coefficients: *mut f32,
-    );
+    pub fn calculate_weight_variables(src: u32, target: u32, out_variables: *mut WeightVariables);
+}
+extern "C" {
+    pub fn calculate_weights(scale: f32, vars: *const WeightVariables, weights: *mut f32);
 }
 extern "C" {
     pub fn resample(
@@ -130,6 +211,19 @@ extern "C" {
         num_channels: u8,
         target_width: u32,
         target_height: u32,
+        src_data: *const u8,
+        out_data: *mut u8,
+    );
+}
+extern "C" {
+    pub fn resample_with_cache(
+        src_width: u32,
+        src_height: u32,
+        target_width: u32,
+        target_height: u32,
+        num_channels: u8,
+        cache: *const Cache,
+        scratch_space: *mut u8,
         src_data: *const u8,
         out_data: *mut u8,
     );

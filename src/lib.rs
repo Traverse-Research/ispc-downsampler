@@ -1,6 +1,7 @@
-use std::{f32::EPSILON, collections::HashMap, rc::Rc};
+use std::{collections::HashMap, rc::Rc};
 
-use ispc::downsample_ispc::CoefficientVariables;
+use ispc::downsample_ispc::{Cache, WeightVariables};
+use ispc::WeightCollection;
 
 mod ispc;
 
@@ -68,20 +69,20 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
     output
 }
 
-#[derive(Debug)]
-pub struct CachedCoefficients {
+#[derive(Debug, Clone)]
+pub struct CachedWeight {
     pub start: u32,
     pub coefficients: Rc<Vec<f32>>,
 }
 
-pub fn calculate_coefficients(src: u32, target: u32) -> Vec<CachedCoefficients> {
+pub fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
 
     assert!(src > target, "Trying to use downsampler to upsample or perform an operation which will cause no changes");
 
-    let mut variables = vec![CoefficientVariables::default(); target as usize];
+    let mut variables = vec![WeightVariables::default(); target as usize];
 
     unsafe {
-        ispc::downsample_ispc::calculate_coefficient_variables(src, target, variables.as_mut_ptr());
+        ispc::downsample_ispc::calculate_weight_variables(src, target, variables.as_mut_ptr());
     };
 
     let image_scale = src as f32 / target as f32;
@@ -102,14 +103,14 @@ pub fn calculate_coefficients(src: u32, target: u32) -> Vec<CachedCoefficients> 
         } else {
             let mut coefficients = vec![0.0; coefficient_count as usize];
             unsafe {
-                ispc::downsample_ispc::calculate_coefficients(image_scale, v as *const _, coefficients.as_mut_ptr());
+                ispc::downsample_ispc::calculate_weights(image_scale, v as *const _, coefficients.as_mut_ptr());
             };
             let coefficients = Rc::new(coefficients);
             reuse_heap.insert(reuse_key, coefficients.clone());
             coefficients
         };
 
-        let cached = CachedCoefficients {
+        let cached = CachedWeight {
             start: v.src_start as u32,
             coefficients,
         };
@@ -120,30 +121,86 @@ pub fn calculate_coefficients(src: u32, target: u32) -> Vec<CachedCoefficients> 
     res
 }
 
+pub fn downsample_cached(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
+    assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
+    assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
+
+
+    let now = std::time::Instant::now();
+    println!("Weight calculation started!");
+    let width_weights = WeightCollection::new(calculate_weights(src.width, target_width));
+    let height_weights = if src.width == src.height && target_width == target_height {
+        width_weights.clone()
+    } else {
+        WeightCollection::new(calculate_weights(src.height, target_height))
+    };
+    println!("Weight calculation finished in {:.2?}!", now.elapsed());
+
+
+    let now = std::time::Instant::now();
+    println!("Allocation started!");
+    let mut scratch_space = Vec::new();
+    scratch_space.resize((src.height * target_width * src.format.num_channels() as u32) as usize, 0u8);
+
+    let mut output = Vec::new();
+    output.resize(
+        (target_width * target_height * src.format.num_channels() as u32) as usize,
+        0,
+    );
+    println!("Allocation finished in {:.2?}!", now.elapsed());
+
+    let weight_cache = Cache {
+        vertical_weights: width_weights.ispc_representation(),
+        horizontal_weights: height_weights.ispc_representation(),
+    };
+    let now = std::time::Instant::now();
+    println!("Cached downsampling started!");
+    unsafe {
+        ispc::downsample_ispc::resample_with_cache(
+            src.width,
+            src.height,
+            target_width,
+            target_height,
+            src.format.num_channels(),
+            &weight_cache as *const _,
+            scratch_space.as_mut_ptr(),
+            src.pixels.as_ptr(),
+            output.as_mut_ptr(),
+        )
+    }
+    println!("Cached downsampling finished in {:.2?}!", now.elapsed());
+
+    output
+}
+
 #[test]
 fn verify_cached_coefficients() {
     use resize::{Scale, lanczos};
     use std::num::NonZeroUsize;
+    use std::f32::EPSILON;
     use fallible_collections::TryHashMap;
 
-    let ispc_coefficients = calculate_coefficients(2048, 512);
+    let ispc_coefficients = calculate_weights(2048, 512);
 
     let mut recycled_coeffs = TryHashMap::with_capacity(512).unwrap();
     let resize_rs_coefficients = Scale::calc_coeffs(NonZeroUsize::new(2048).unwrap(), 512, (&|x| lanczos(3.0, x), 3.0), &mut recycled_coeffs).unwrap();
 
     for (index, (ispc, rs)) in ispc_coefficients.iter().zip(resize_rs_coefficients.iter()).enumerate() {
-        let mut same = true;
-        same &= ispc.start == rs.start as u32;
-        same &= ispc.coefficients.len() == rs.coeffs.len();
+        let mut correct = true;
+        correct &= ispc.start == rs.start as u32;
+        correct &= ispc.coefficients.len() == rs.coeffs.len();
 
         for (ispc, rs) in ispc.coefficients.iter().zip(rs.coeffs.iter()) {
             if ispc - rs > EPSILON {
-                println!("Reeeeeeee");
-                same &= false;
+                correct &= false;
             }
         }
+        let sum = ispc.coefficients.iter().copied().sum::<f32>();
+        if (sum - 1.0).abs() > EPSILON * 10.0 {
+            panic!("Reeeeeee {}", sum);
+        }
 
-        if !same {
+        if !correct {
             panic!("Difference found between ispc and resize rs coefficients at index {}.\n ispc: {:?}\n rs: {:?}", index, ispc, rs)
         }
     }
