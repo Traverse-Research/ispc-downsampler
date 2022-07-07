@@ -4,7 +4,7 @@ use resize::{px::RGB, Type::Lanczos3};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
 
-const DOWNSCALE: usize = 8;
+const DOWNSCALE: usize = 4;
 
 pub fn ispc_downsampler(c: &mut Criterion) {
     if let LoadResult::ImageU8(img) = load(Path::new("test_assets/square_test.png")) {

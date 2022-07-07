@@ -71,6 +71,7 @@ pub fn downsample_fast(src: &Image, target_width: u32, target_height: u32) -> Ve
     output
 }
 
+// Defines a line of weights. `coefficients` contains a weight for each pixel after `start`
 #[derive(Debug, Clone)]
 struct CachedWeight {
     pub start: u32,
@@ -82,21 +83,27 @@ pub(crate) fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
         src > target,
         "Trying to use downsampler to upsample or perform an operation which will cause no changes"
     );
-
+    // Every line of weights is based on the start and end of the line, and its "center" which has the biggest weight.
+    // These weight lines follow a pattern, so we can skip calculating some of them by caching all different line we get.
+    // For that purpose, we first determine the variables which define the line.
     let mut variables = vec![WeightVariables::default(); target as usize];
 
     unsafe {
         ispc::downsample_ispc::calculate_weight_variables(src, target, variables.as_mut_ptr());
-    };
+    }
 
     let image_scale = src as f32 / target as f32;
 
     let mut res = Vec::with_capacity(target as usize);
 
+    // We cache the weights in a map so that we can reuse them as we need.
+    // Half of the total number of weights seems like a good starting point to avoid unnecessary copies when resizing.
     let mut reuse_heap = HashMap::<_, Rc<Vec<f32>>>::with_capacity(target as usize / 2);
 
     for v in variables.iter() {
         let coefficient_count = (v.src_end - v.src_start + 1.0) as u32;
+        // The unique values that define a collection of cached weights are how many pixels it includes and the distance from its start to its center.
+        // We use them to create a key based on which we reuse ones we've calculated previously.
         let reuse_key = (
             coefficient_count,
             (v.src_center - v.src_start).to_ne_bytes(),
@@ -104,6 +111,8 @@ pub(crate) fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
 
         let reused = reuse_heap.get(&reuse_key);
 
+        // If there is already a weight line calculated for that key, we clone it since it's an `Rc`.
+        // If there isn't, we calculate the weights and add them to the reuse heap.
         let coefficients = if let Some(coefficients) = reused {
             coefficients.clone()
         } else {
@@ -114,7 +123,7 @@ pub(crate) fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
                     v as *const _,
                     coefficients.as_mut_ptr(),
                 );
-            };
+            }
             let coefficients = Rc::new(coefficients);
             reuse_heap.insert(reuse_key, coefficients.clone());
             coefficients
@@ -142,6 +151,8 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The height of the source image is less than the target's height. You are trying to upsample rather than downsample");
 
+    // The weights are calculated per-axis, and are only based on the source and target dimensions of that axis.
+    // Because of that, if both axes have the same source and target dimensions, they will have the same weights.
     let width_weights = WeightCollection::new(calculate_weights(src.width, target_width));
     let height_weights = if src.width == src.height && target_width == target_height {
         width_weights.clone()
@@ -149,6 +160,7 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
         WeightCollection::new(calculate_weights(src.height, target_height))
     };
 
+    // The new implementation needs a src_height * target_width intermediate buffer.
     let mut scratch_space = Vec::new();
     scratch_space.resize(
         (src.height * target_width * src.format.num_channels() as u32) as usize,
@@ -166,17 +178,29 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
         horizontal_weights: height_weights.ispc_representation(),
     };
     unsafe {
-        ispc::downsample_ispc::resample_with_cache(
-            src.width,
-            src.height,
-            target_width,
-            target_height,
-            src.format.num_channels(),
-            &weight_cache as *const _,
-            scratch_space.as_mut_ptr(),
-            src.pixels.as_ptr(),
-            output.as_mut_ptr(),
-        )
+        if src.format.num_channels() == 3 {
+            ispc::downsample_ispc::resample_with_cache_3(
+                src.width,
+                src.height,
+                target_width,
+                target_height,
+                &weight_cache as *const _,
+                scratch_space.as_mut_ptr(),
+                src.pixels.as_ptr(),
+                output.as_mut_ptr(),
+            );
+        } else {
+            ispc::downsample_ispc::resample_with_cache_4(
+                src.width,
+                src.height,
+                target_width,
+                target_height,
+                &weight_cache as *const _,
+                scratch_space.as_mut_ptr(),
+                src.pixels.as_ptr(),
+                output.as_mut_ptr(),
+            );
+        }
     }
 
     output

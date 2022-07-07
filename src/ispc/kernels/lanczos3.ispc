@@ -146,14 +146,18 @@ export void calculate_weights(uniform float scale, uniform const WeightVariables
     uniform float end = vars->src_end;
     uniform float center = vars->src_center;
 
+    // Calculate the Lanczos3 weight of each pixel
     foreach(i = 0 ... end - start + 1) {
         weights[i] = lanczos3_filter((start + (float)i - center) / scale);
     }
+
+    // The needs to be done in a normal loop because we cannot apply vectorization to it.
     float sum = 0.0;
     for(int i = 0; i < end - start + 1; i++) {
         sum += weights[i];
     }
 
+    // Normalize the weights, such that their sum is 1.0f
     foreach(i = 0 ... end - start + 1) {
         weights[i] /= sum;
     }
@@ -171,6 +175,8 @@ struct Cache {
 };
 
 uint8<4> sample_3_channels(varying uint64 read_address, const uniform uint8* varying src) {
+    // Pointer hacks to read all channels at once rather than one-by-one, despite technically reading uint8<3> to a uint8<4>.
+    // While testing, this proved more performant than reading one-by-one.
     const uniform uint8* pixel_ptr = src + read_address;
     const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
     varying uint8<4> dst = {0, 0, 0, 0};
@@ -180,10 +186,15 @@ uint8<4> sample_3_channels(varying uint64 read_address, const uniform uint8* var
 }
 
 void clean_and_write_3_channels(varying float<4> color, varying uint64 write_address, uniform uint8* varying dst) {
+    // The final color is a sum of numbers that are multiplied by the weights of their respective pixels.
+    // Because of their numbers, floating point precision leads to the final color being potentially outside of the 0-255 range by a slighty margin.
+    // This would cause an underflow/overflow, which we avoid with the clamps.
     color.x = clamp(color.x, 0.0f, 255.0f);
     color.y = clamp(color.y, 0.0f, 255.0f);
     color.z = clamp(color.z, 0.0f, 255.0f);
 
+    // Pointer hacks to write all channels at once rather than one-by-one, despite technically writing uint8<4> to a uint8<3>.
+    // While testing, this proved more performant than writing one-by-one.
     uniform uint8* pixel_ptr = dst + write_address;
     uniform uint8<3>* pixel_ptr3 = (uniform uint8<3>*)(pixel_ptr);
     varying float<3>* varying col_ptr3 = (varying float<3>* varying)&color;
@@ -210,9 +221,12 @@ void clean_and_write_4_channels(varying float<4> color, varying uint64 write_add
 }
 
 /// scratch_space must be at least src_height * target_width pixels big
-export void resample_with_cache(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height, uniform uint8 num_channels,
+void resample_with_cache(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height, uniform uint8 num_channels,
     uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
 
+    // Quick way to swap between sampling for 3 channels and sampling for 4 channels.
+    // TODO[#Kamen]: This is slow because of the function pointers. Branching yields the same results, but is more difficult to maintain.
+    // Ideally, we should split this function into two versions depending channel count, and branch only once in Rust than twice per sample.
     varying uint8<4> (*read_fn)(varying uint64, const uniform uint8*);
     void (*write_fn)(varying float<4>, varying uint64, uniform uint8*);
 
@@ -271,4 +285,17 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
         uint64 out_write_address = (y * target_height + x) * num_channels;
         write_fn(color, out_write_address, out_data);
     }
+}
+
+export void resample_with_cache_3(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height,
+    uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
+
+    resample_with_cache(src_width, src_height, target_width, target_height, 3, cache, scratch_space, src_data, out_data);
+}
+
+
+export void resample_with_cache_4(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height,
+    uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
+
+    resample_with_cache(src_width, src_height, target_width, target_height, 4, cache, scratch_space, src_data, out_data);
 }
