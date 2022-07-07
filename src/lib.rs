@@ -43,7 +43,9 @@ impl<'a> Image<'a> {
 /// Runs the ISPC kernel on the source image, sampling it down to the `target_width` and `target_height`. Returns the downsampled pixel data as a `Vec<u8>`.
 ///
 /// Will panic if the target width or height are higher than that of the source image.
-pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
+///
+/// Will result in noticably worse images than [`downsample`]. Use this only if you need to quickly sample down and don't care about the quality.
+pub fn downsample_fast(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
 
@@ -70,12 +72,12 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
 }
 
 #[derive(Debug, Clone)]
-pub struct CachedWeight {
+struct CachedWeight {
     pub start: u32,
     pub coefficients: Rc<Vec<f32>>,
 }
 
-pub fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
+pub(crate) fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
     assert!(
         src > target,
         "Trying to use downsampler to upsample or perform an operation which will cause no changes"
@@ -129,9 +131,16 @@ pub fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
     res
 }
 
-pub fn downsample_cached(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
+/// Samples the provided image down to the specified width and height.
+/// `target_width` and `target_height` are expected to be less than or equal to their `src` counter parts.
+/// Will panic if the target dimensions are the same as the source image's.
+///
+/// Preserves the detail of the source image well.
+/// If a faster implementation is needed regardless of the final image quality, see [`downsample_fast`].
+pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
+    assert!(src.width != target_width || src.height != target_height, "Trying to downsample to an image of the same resolution as the source image. This can be avoided.");
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
-    assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
+    assert!(src.height >= target_height, "The height of the source image is less than the target's height. You are trying to upsample rather than downsample");
 
     let width_weights = WeightCollection::new(calculate_weights(src.width, target_width));
     let height_weights = if src.width == src.height && target_width == target_height {

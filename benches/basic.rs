@@ -1,9 +1,8 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use fallible_collections::TryHashMap;
-use ispc_downsampler::{calculate_weights, downsample_cached, Format, Image};
-use resize::{lanczos, px::RGB, Scale, Type::Lanczos3};
+use ispc_downsampler::{downsample, Format, Image};
+use resize::{px::RGB, Type::Lanczos3};
 use stb_image::image::{load, LoadResult};
-use std::{num::NonZeroUsize, path::Path};
+use std::path::Path;
 
 const DOWNSCALE: usize = 8;
 
@@ -21,7 +20,7 @@ pub fn ispc_downsampler(c: &mut Criterion) {
         let target_height = (img.height / DOWNSCALE) as u32;
 
         c.bench_function("Downsample `square_test.png` using ispc_downsampler", |b| {
-            b.iter(|| downsample_cached(&src_img, target_width, target_height))
+            b.iter(|| downsample(&src_img, target_width, target_height))
         });
     }
 }
@@ -55,30 +54,5 @@ pub fn resize_rs(c: &mut Criterion) {
     }
 }
 
-pub fn ispc_coefficients(c: &mut Criterion) {
-    c.bench_function("Calculate coefficients in ISPC", |b| {
-        b.iter(|| calculate_weights(2048, 512))
-    });
-}
-
-pub fn resize_rs_coefficients(c: &mut Criterion) {
-    c.bench_function("Calculate coefficients with resize-rs", |b| {
-        b.iter(|| {
-            let mut recycled_coeffs = TryHashMap::with_capacity(512).unwrap();
-            Scale::calc_coeffs(
-                NonZeroUsize::new(2048).unwrap(),
-                512,
-                (&|x| lanczos(3.0, x), 3.0),
-                &mut recycled_coeffs,
-            )
-        })
-    });
-}
-
 criterion_group!(benches, ispc_downsampler, resize_rs);
-criterion_group!(
-    coefficient_benches,
-    ispc_coefficients,
-    resize_rs_coefficients
-);
 criterion_main!(benches);
