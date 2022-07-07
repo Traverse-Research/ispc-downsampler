@@ -36,7 +36,7 @@ fn main() {
                         RgbaImage::from_vec(target_width, target_height, downsampled_pixels)
                             .unwrap();
                     save_image
-                        .save("example_outputs/square_test_result_cache.png")
+                        .save("example_outputs/square_test_result.png")
                         .unwrap()
                 }
                 Format::RGB8 => {
@@ -44,7 +44,7 @@ fn main() {
                         RgbImage::from_vec(target_width, target_height, downsampled_pixels)
                             .unwrap();
                     save_image
-                        .save("example_outputs/square_test_result_cache.png")
+                        .save("example_outputs/square_test_result.png")
                         .unwrap()
                 }
             }
