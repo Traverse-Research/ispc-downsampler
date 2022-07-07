@@ -27,7 +27,7 @@ ispc_rt = "1.1"
 image = "0.24.1"
 stb_image = "0.2.4"
 criterion = "0.3"
-resize = { path = "../resize" }
+resize = "0.7.3"
 fallible_collections = "0.4.5"
 
 [[bench]]
