@@ -21,8 +21,8 @@ fn main() {
 
             let src_img = Image::new(&img.data, img.width as u32, img.height as u32, src_fmt);
 
-            let target_width = (img.width / 2) as u32;
-            let target_height = (img.height / 2) as u32;
+            let target_width = (img.width / 4) as u32;
+            let target_height = (img.height / 4) as u32;
 
             let now = Instant::now();
             println!("Downsampling started!");
