@@ -179,7 +179,7 @@ uint8<4> sample_3_channels(varying uint64 read_address, const uniform uint8* var
     return dst;
 }
 
-void clean_and_write_3_channels(varying float<4> color, varying write_address, uniform uint8* varying dst) {
+void clean_and_write_3_channels(varying float<4> color, varying uint64 write_address, uniform uint8* varying dst) {
     color.x = clamp(color.x, 0.0f, 255.0f);
     color.y = clamp(color.y, 0.0f, 255.0f);
     color.z = clamp(color.z, 0.0f, 255.0f);
@@ -198,7 +198,7 @@ uint8<4> sample_4_channels(varying uint64 read_address, const uniform uint8* var
     return dst;
 }
 
-void clean_and_write_4_channels(varying float<4> color, varying write_address, uniform uint8* varying dst) {
+void clean_and_write_4_channels(varying float<4> color, varying uint64 write_address, uniform uint8* varying dst) {
     color.x = clamp(color.x, 0.0f, 255.0f);
     color.y = clamp(color.y, 0.0f, 255.0f);
     color.z = clamp(color.z, 0.0f, 255.0f);
@@ -212,6 +212,17 @@ void clean_and_write_4_channels(varying float<4> color, varying write_address, u
 /// scratch_space must be at least src_height * target_width pixels big
 export void resample_with_cache(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height, uniform uint8 num_channels,
     uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
+
+    varying uint8<4> (*read_fn)(varying uint64, const uniform uint8*);
+    void (*write_fn)(varying float<4>, varying uint64, uniform uint8*);
+
+    if (num_channels == 3) {
+        read_fn = sample_3_channels;
+        write_fn = clean_and_write_3_channels;
+    } else {
+        read_fn = sample_4_channels;
+        write_fn = clean_and_write_4_channels;
+    }
 
     uniform WeightCollection * uniform vertical_weight_collection = &cache->vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = &cache->horizontal_weights;
@@ -229,12 +240,12 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
             uint src_x = src_width_start + i;
             uint64 src_read_address = (y * src_width + src_x) * num_channels;
 
-            color += sample_3_channels(src_read_address, src_data) * weight;
+            color += read_fn(src_read_address, src_data) * weight;
         }
 
         uint64 scratch_write_address = (y * target_width + x) * num_channels;
 
-        clean_and_write_3_channels(color, scratch_write_address, scratch_space);
+        write_fn(color, scratch_write_address, scratch_space);
     }
 
     // Accumulate the scratch space data along the height
@@ -254,10 +265,10 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
             uniform uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space + scratch_read_address);
             uint8<3> scratch_color = *scratch_pixel_ptr;
 
-            color += sample_3_channels(scratch_read_address, scratch_space) * weight;
+            color += read_fn(scratch_read_address, scratch_space) * weight;
         }
 
         uint64 out_write_address = (y * target_height + x) * num_channels;
-        clean_and_write_3_channels(color, out_write_address, out_data);
+        write_fn(color, out_write_address, out_data);
     }
 }
