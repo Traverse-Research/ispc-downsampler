@@ -174,18 +174,17 @@ struct Cache {
     uniform WeightCollection horizontal_weights;
 };
 
-uint8<4> sample_3_channels(varying uint64 read_address, const uniform uint8* varying src) {
+uint8<3> sample_3_channels(varying uint64 read_address, const uniform uint8* varying src) {
     // Pointer hacks to read all channels at once rather than one-by-one, despite technically reading uint8<3> to a uint8<4>.
     // While testing, this proved more performant than reading one-by-one.
     const uniform uint8* pixel_ptr = src + read_address;
     const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
-    varying uint8<4> dst = {0, 0, 0, 0};
-    varying uint8<3>* varying dst_ptr = (varying uint8<3>* varying)&dst;
-    *dst_ptr = *pixel_ptr3;
+    varying uint8<3> dst = {0, 0, 0};
+    dst = *pixel_ptr3;
     return dst;
 }
 
-void clean_and_write_3_channels(varying float<4> color, varying uint64 write_address, uniform uint8* varying dst) {
+void clean_and_write_3_channels(varying float<3> color, varying uint64 write_address, uniform uint8* varying dst) {
     // The final color is a sum of numbers that are multiplied by the weights of their respective pixels.
     // Because of their numbers, floating point precision leads to the final color being potentially outside of the 0-255 range by a slighty margin.
     // This would cause an underflow/overflow, which we avoid with the clamps.
@@ -197,8 +196,7 @@ void clean_and_write_3_channels(varying float<4> color, varying uint64 write_add
     // While testing, this proved more performant than writing one-by-one.
     uniform uint8* pixel_ptr = dst + write_address;
     uniform uint8<3>* pixel_ptr3 = (uniform uint8<3>*)(pixel_ptr);
-    varying float<3>* varying col_ptr3 = (varying float<3>* varying)&color;
-    *pixel_ptr3 = *col_ptr3;
+    *pixel_ptr3 = color;
 }
 
 uint8<4> sample_4_channels(varying uint64 read_address, const uniform uint8* varying src) {
@@ -221,9 +219,65 @@ void clean_and_write_4_channels(varying float<4> color, varying uint64 write_add
 }
 
 /// scratch_space must be at least src_height * target_width pixels big
-export void resample_with_cache(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height, uniform uint8 num_channels,
+export void resample_with_cache_3(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height,
     uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
     // TODO[#Kamen]: Ideally, we should split this function into two versions depending channel count, and branch only once in Rust than twice per sample.
+    uniform const uint num_channels = 3;
+    uniform WeightCollection * uniform vertical_weight_collection = &cache->vertical_weights;
+    uniform WeightCollection * uniform horizontal_weight_collection = &cache->horizontal_weights;
+
+    // Accumulate only along the width for each pixel, sampling from the source image
+    // Results in the source image being downsampled to src_height X target_width
+    foreach_tiled(y =  0 ... src_height, x = 0 ... target_width) {
+        uint src_width_start = horizontal_weight_collection->starts[x];
+        uint num_horizontal_weights = horizontal_weight_collection->weight_counts[x];
+        float* horizontal_weights = horizontal_weight_collection->values[x];
+
+        float<3> color = {0.0f, 0.0f, 0.0f};
+        for (uint i = 0; i < num_horizontal_weights; i++) {
+            float weight = horizontal_weights[i];
+            uint src_x = src_width_start + i;
+            uint64 src_read_address = (y * src_width + src_x) * num_channels;
+
+            color += sample_3_channels(src_read_address, src_data) * weight;
+        }
+
+        uint64 scratch_write_address = (y * target_width + x) * num_channels;
+
+        clean_and_write_3_channels(color, scratch_write_address, scratch_space);
+    }
+
+    // Accumulate the scratch space data along the height
+    // Downsamples the src_height X target_width image to target_height * target_width
+    foreach_tiled(y =  0 ... target_height, x = 0 ... target_width) {
+
+        uint src_height_start = vertical_weight_collection->starts[y];
+        uint num_vertical_weights = vertical_weight_collection->weight_counts[y];
+        float* vertical_weights = vertical_weight_collection->values[y];
+
+        float<3> color = {0.0f, 0.0f, 0.0f};
+        for (uint i = 0; i < num_vertical_weights; i++) {
+            float weight = vertical_weights[i];
+            uint scratch_y = src_height_start + i;
+            uint64 scratch_read_address = (scratch_y * target_width + x) * num_channels;
+
+            uniform uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space + scratch_read_address);
+            uint8<3> scratch_color = *scratch_pixel_ptr;
+
+            color += sample_3_channels(scratch_read_address, scratch_space) * weight;
+        }
+
+        uint64 out_write_address = (y * target_height + x) * num_channels;
+
+        clean_and_write_3_channels(color, out_write_address, out_data);
+    }
+}
+
+/// scratch_space must be at least src_height * target_width pixels big
+export void resample_with_cache_4(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height,
+    uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
+    // TODO[#Kamen]: Ideally, we should split this function into two versions depending channel count, and branch only once in Rust than twice per sample.
+    uniform const uint num_channels = 4;
 
     uniform WeightCollection * uniform vertical_weight_collection = &cache->vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = &cache->horizontal_weights;
@@ -241,20 +295,12 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
             uint src_x = src_width_start + i;
             uint64 src_read_address = (y * src_width + src_x) * num_channels;
 
-            if (num_channels == 3) {
-                color += sample_3_channels(src_read_address, src_data) * weight;
-            } else {
-                color += sample_4_channels(src_read_address, src_data) * weight;
-            }
+            color += sample_4_channels(src_read_address, src_data) * weight;
         }
 
         uint64 scratch_write_address = (y * target_width + x) * num_channels;
 
-        if (num_channels == 3) {
-            clean_and_write_3_channels(color, scratch_write_address, scratch_space);
-        } else {
-            clean_and_write_4_channels(color, scratch_write_address, scratch_space);
-        }
+        clean_and_write_4_channels(color, scratch_write_address, scratch_space);
     }
 
     // Accumulate the scratch space data along the height
@@ -274,19 +320,11 @@ export void resample_with_cache(uniform uint src_width, uniform uint src_height,
             uniform uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space + scratch_read_address);
             uint8<3> scratch_color = *scratch_pixel_ptr;
 
-            if (num_channels == 3) {
-                color += sample_3_channels(scratch_read_address, scratch_space) * weight;
-            } else {
-                color += sample_4_channels(scratch_read_address, scratch_space) * weight;
-            }
+            color += sample_4_channels(scratch_read_address, scratch_space) * weight;
         }
 
         uint64 out_write_address = (y * target_height + x) * num_channels;
 
-        if (num_channels == 3) {
-            clean_and_write_3_channels(color, out_write_address, out_data);
-        } else {
-            clean_and_write_4_channels(color, out_write_address, out_data);
-        }
+        clean_and_write_4_channels(color, out_write_address, out_data);
     }
 }

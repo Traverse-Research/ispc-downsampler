@@ -178,31 +178,29 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
         horizontal_weights: height_weights.ispc_representation(),
     };
     unsafe {
-        ispc::downsample_ispc::resample_with_cache(
-            src.width,
-            src.height,
-            target_width,
-            target_height,
-            src.format.num_channels(),
-            &weight_cache as *const _,
-            scratch_space.as_mut_ptr(),
-            src.pixels.as_ptr(),
-            output.as_mut_ptr(),
-        );
-        // if src.format.num_channels() == 3 {
-
-        // } else {
-        //     ispc::downsample_ispc::resample_with_cache_4(
-        //         src.width,
-        //         src.height,
-        //         target_width,
-        //         target_height,
-        //         &weight_cache as *const _,
-        //         scratch_space.as_mut_ptr(),
-        //         src.pixels.as_ptr(),
-        //         output.as_mut_ptr(),
-        //     );
-        // }
+        if src.format.num_channels() == 3 {
+            ispc::downsample_ispc::resample_with_cache_3(
+                src.width,
+                src.height,
+                target_width,
+                target_height,
+                &weight_cache as *const _,
+                scratch_space.as_mut_ptr(),
+                src.pixels.as_ptr(),
+                output.as_mut_ptr(),
+            );
+        } else {
+            ispc::downsample_ispc::resample_with_cache_4(
+                src.width,
+                src.height,
+                target_width,
+                target_height,
+                &weight_cache as *const _,
+                scratch_space.as_mut_ptr(),
+                src.pixels.as_ptr(),
+                output.as_mut_ptr(),
+            );
+        }
     }
 
     output

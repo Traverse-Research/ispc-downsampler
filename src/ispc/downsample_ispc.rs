@@ -160,12 +160,23 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn resample_with_cache(
+    pub fn resample_with_cache_3(
         src_width: u32,
         src_height: u32,
         target_width: u32,
         target_height: u32,
-        num_channels: u8,
+        cache: *const Cache,
+        scratch_space: *mut u8,
+        src_data: *const u8,
+        out_data: *mut u8,
+    );
+}
+extern "C" {
+    pub fn resample_with_cache_4(
+        src_width: u32,
+        src_height: u32,
+        target_width: u32,
+        target_height: u32,
         cache: *const Cache,
         scratch_space: *mut u8,
         src_data: *const u8,
