@@ -221,22 +221,9 @@ void clean_and_write_4_channels(varying float<4> color, varying uint64 write_add
 }
 
 /// scratch_space must be at least src_height * target_width pixels big
-void resample_with_cache(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height, uniform uint8 num_channels,
+export void resample_with_cache(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height, uniform uint8 num_channels,
     uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
-
-    // Quick way to swap between sampling for 3 channels and sampling for 4 channels.
-    // TODO[#Kamen]: This is slow because of the function pointers. Branching yields the same results, but is more difficult to maintain.
-    // Ideally, we should split this function into two versions depending channel count, and branch only once in Rust than twice per sample.
-    varying uint8<4> (*read_fn)(varying uint64, const uniform uint8*);
-    void (*write_fn)(varying float<4>, varying uint64, uniform uint8*);
-
-    if (num_channels == 3) {
-        read_fn = sample_3_channels;
-        write_fn = clean_and_write_3_channels;
-    } else {
-        read_fn = sample_4_channels;
-        write_fn = clean_and_write_4_channels;
-    }
+    // TODO[#Kamen]: Ideally, we should split this function into two versions depending channel count, and branch only once in Rust than twice per sample.
 
     uniform WeightCollection * uniform vertical_weight_collection = &cache->vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = &cache->horizontal_weights;
@@ -254,12 +241,20 @@ void resample_with_cache(uniform uint src_width, uniform uint src_height, unifor
             uint src_x = src_width_start + i;
             uint64 src_read_address = (y * src_width + src_x) * num_channels;
 
-            color += read_fn(src_read_address, src_data) * weight;
+            if (num_channels == 3) {
+                color += sample_3_channels(src_read_address, src_data) * weight;
+            } else {
+                color += sample_4_channels(src_read_address, src_data) * weight;
+            }
         }
 
         uint64 scratch_write_address = (y * target_width + x) * num_channels;
 
-        write_fn(color, scratch_write_address, scratch_space);
+        if (num_channels == 3) {
+            clean_and_write_3_channels(color, scratch_write_address, scratch_space);
+        } else {
+            clean_and_write_4_channels(color, scratch_write_address, scratch_space);
+        }
     }
 
     // Accumulate the scratch space data along the height
@@ -279,23 +274,19 @@ void resample_with_cache(uniform uint src_width, uniform uint src_height, unifor
             uniform uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space + scratch_read_address);
             uint8<3> scratch_color = *scratch_pixel_ptr;
 
-            color += read_fn(scratch_read_address, scratch_space) * weight;
+            if (num_channels == 3) {
+                color += sample_3_channels(scratch_read_address, scratch_space) * weight;
+            } else {
+                color += sample_4_channels(scratch_read_address, scratch_space) * weight;
+            }
         }
 
         uint64 out_write_address = (y * target_height + x) * num_channels;
-        write_fn(color, out_write_address, out_data);
+
+        if (num_channels == 3) {
+            clean_and_write_3_channels(color, out_write_address, out_data);
+        } else {
+            clean_and_write_4_channels(color, out_write_address, out_data);
+        }
     }
-}
-
-export void resample_with_cache_3(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height,
-    uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
-
-    resample_with_cache(src_width, src_height, target_width, target_height, 3, cache, scratch_space, src_data, out_data);
-}
-
-
-export void resample_with_cache_4(uniform uint src_width, uniform uint src_height, uniform uint target_width, uniform uint target_height,
-    uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
-
-    resample_with_cache(src_width, src_height, target_width, target_height, 4, cache, scratch_space, src_data, out_data);
 }
