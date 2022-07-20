@@ -58,7 +58,12 @@ pub(crate) fn calculate_weights(src: u32, target: u32, filter_scale: f32) -> Vec
     let mut variables = vec![WeightVariables::default(); target as usize];
 
     unsafe {
-        ispc::downsample_ispc::calculate_weight_variables(filter_scale, src, target, variables.as_mut_ptr());
+        ispc::downsample_ispc::calculate_weight_variables(
+            filter_scale,
+            src,
+            target,
+            variables.as_mut_ptr(),
+        );
     }
 
     let image_scale = src as f32 / target as f32;
@@ -127,15 +132,24 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
 /// As a guideline, a `filter_scale` of 3.0 preserves detail well.
 /// A scale of 1.0 preserves is good if speed is necessary, but still preserves a decent amount of detail.
 /// Anything below is even faster, although the loss of detail becomes clear.
-pub fn downsample_with_custom_scale(src: &Image, target_width: u32, target_height: u32, filter_scale: f32) -> Vec<u8> {
+pub fn downsample_with_custom_scale(
+    src: &Image,
+    target_width: u32,
+    target_height: u32,
+    filter_scale: f32,
+) -> Vec<u8> {
     assert!(src.width != target_width || src.height != target_height, "Trying to downsample to an image of the same resolution as the source image. This operation can be avoided.");
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The height of the source image is less than the target's height. You are trying to upsample rather than downsample");
-    assert!(filter_scale > 0.0, "filter_scale must be more than 0.0 when downsampling.");
+    assert!(
+        filter_scale > 0.0,
+        "filter_scale must be more than 0.0 when downsampling."
+    );
 
     // The weights are calculated per-axis, and are only based on the source and target dimensions of that axis.
     // Because of that, if both axes have the same source and target dimensions, they will have the same weights.
-    let width_weights = WeightCollection::new(calculate_weights(src.width, target_width, filter_scale));
+    let width_weights =
+        WeightCollection::new(calculate_weights(src.width, target_width, filter_scale));
     let height_weights = if src.width == src.height && target_width == target_height {
         width_weights.clone()
     } else {

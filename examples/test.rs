@@ -1,5 +1,5 @@
 use image::{RgbImage, RgbaImage};
-use ispc_downsampler::{downsample, Format, Image, downsample_with_custom_scale};
+use ispc_downsampler::{downsample_with_custom_scale, Format, Image};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
 use std::time::Instant;
@@ -26,7 +26,8 @@ fn main() {
 
             let now = Instant::now();
             println!("Downsampling started!");
-            let downsampled_pixels = downsample_with_custom_scale(&src_img, target_width, target_height, 1.0);
+            let downsampled_pixels =
+                downsample_with_custom_scale(&src_img, target_width, target_height, 1.0);
             println!("Finished downsampling in {:.2?}!", now.elapsed());
 
             std::fs::create_dir_all("example_outputs").unwrap();
