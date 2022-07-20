@@ -142,21 +142,19 @@ fn bindgen_test_layout_Cache() {
     );
 }
 extern "C" {
-    pub fn calculate_weight_variables(src: u32, target: u32, out_variables: *mut WeightVariables);
+    pub fn calculate_weight_variables(
+        filter_scale: f32,
+        src: u32,
+        target: u32,
+        out_variables: *mut WeightVariables,
+    );
 }
 extern "C" {
-    pub fn calculate_weights(scale: f32, vars: *const WeightVariables, weights: *mut f32);
-}
-extern "C" {
-    pub fn resample(
-        width: u32,
-        height: u32,
-        stride: u32,
-        num_channels: u8,
-        target_width: u32,
-        target_height: u32,
-        src_data: *const u8,
-        out_data: *mut u8,
+    pub fn calculate_weights(
+        image_scale: f32,
+        filter_scale: f32,
+        vars: *const WeightVariables,
+        weights: *mut f32,
     );
 }
 extern "C" {

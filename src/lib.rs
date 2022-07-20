@@ -40,37 +40,6 @@ impl<'a> Image<'a> {
     }
 }
 
-/// Runs the ISPC kernel on the source image, sampling it down to the `target_width` and `target_height`. Returns the downsampled pixel data as a `Vec<u8>`.
-///
-/// Will panic if the target width or height are higher than that of the source image.
-///
-/// Will result in noticably worse images than [`downsample`]. Use this only if you need to quickly sample down and don't care about the quality.
-pub fn downsample_fast(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
-    assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
-    assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
-
-    let mut output = Vec::new();
-    output.resize(
-        (target_width * target_height * src.format.num_channels() as u32) as usize,
-        0,
-    );
-
-    unsafe {
-        ispc::downsample_ispc::resample(
-            src.width,
-            src.height,
-            src.width,
-            src.format.num_channels(),
-            target_width,
-            target_height,
-            src.pixels.as_ptr(),
-            output.as_mut_ptr(),
-        )
-    }
-
-    output
-}
-
 // Defines a line of weights. `coefficients` contains a weight for each pixel after `start`
 #[derive(Debug, Clone)]
 struct CachedWeight {
@@ -78,7 +47,7 @@ struct CachedWeight {
     pub coefficients: Rc<Vec<f32>>,
 }
 
-pub(crate) fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
+pub(crate) fn calculate_weights(src: u32, target: u32, filter_scale: f32) -> Vec<CachedWeight> {
     assert!(
         src > target,
         "Trying to use downsampler to upsample or perform an operation which will cause no changes"
@@ -89,7 +58,7 @@ pub(crate) fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
     let mut variables = vec![WeightVariables::default(); target as usize];
 
     unsafe {
-        ispc::downsample_ispc::calculate_weight_variables(src, target, variables.as_mut_ptr());
+        ispc::downsample_ispc::calculate_weight_variables(filter_scale, src, target, variables.as_mut_ptr());
     }
 
     let image_scale = src as f32 / target as f32;
@@ -120,6 +89,7 @@ pub(crate) fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
             unsafe {
                 ispc::downsample_ispc::calculate_weights(
                     image_scale,
+                    filter_scale,
                     v as *const _,
                     coefficients.as_mut_ptr(),
                 );
@@ -144,20 +114,32 @@ pub(crate) fn calculate_weights(src: u32, target: u32) -> Vec<CachedWeight> {
 /// `target_width` and `target_height` are expected to be less than or equal to their `src` counter parts.
 /// Will panic if the target dimensions are the same as the source image's.
 ///
-/// Preserves the detail of the source image well.
-/// If a faster implementation is needed regardless of the final image quality, see [`downsample_fast`].
+/// For a more fine-tunable version of this function, see [downsample_with_custom_scale].
 pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
-    assert!(src.width != target_width || src.height != target_height, "Trying to downsample to an image of the same resolution as the source image. This can be avoided.");
+    downsample_with_custom_scale(src, target_width, target_height, 3.0)
+}
+
+/// Version of [downsample] which allows for a custom filter scale, thus trading between speed and final image quality.
+///
+/// `filter_scale` controls how many samples are made relative to the size ratio between the source and target resolutions.
+/// The higher the scale, the more detail is preserved, but the slower the downsampling is. Note that the effect on the detail becomes smaller the higher the scale is.
+///
+/// As a guideline, a `filter_scale` of 3.0 preserves detail well.
+/// A scale of 1.0 preserves is good if speed is necessary, but still preserves a decent amount of detail.
+/// Anything below is even faster, although the loss of detail becomes clear.
+pub fn downsample_with_custom_scale(src: &Image, target_width: u32, target_height: u32, filter_scale: f32) -> Vec<u8> {
+    assert!(src.width != target_width || src.height != target_height, "Trying to downsample to an image of the same resolution as the source image. This operation can be avoided.");
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The height of the source image is less than the target's height. You are trying to upsample rather than downsample");
+    assert!(filter_scale > 0.0, "filter_scale must be more than 0.0 when downsampling.");
 
     // The weights are calculated per-axis, and are only based on the source and target dimensions of that axis.
     // Because of that, if both axes have the same source and target dimensions, they will have the same weights.
-    let width_weights = WeightCollection::new(calculate_weights(src.width, target_width));
+    let width_weights = WeightCollection::new(calculate_weights(src.width, target_width, filter_scale));
     let height_weights = if src.width == src.height && target_width == target_height {
         width_weights.clone()
     } else {
-        WeightCollection::new(calculate_weights(src.height, target_height))
+        WeightCollection::new(calculate_weights(src.height, target_height, filter_scale))
     };
 
     // The new implementation needs a src_height * target_width intermediate buffer.
