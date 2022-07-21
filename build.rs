@@ -29,7 +29,12 @@ fn compile_bindings() {
         .target_isas(target_isas)
         .math_lib(MathLib::Fast)
         .bindgen_options(BindgenOptions {
-            allowlist_functions: vec!["resample".into()],
+            allowlist_functions: vec![
+                "resample_with_cache_3".into(),
+                "resample_with_cache_4".into(),
+                "calculate_weights".into(),
+                "calculate_weight_variables".into(),
+            ],
         })
         .out_dir("src/ispc")
         .compile("downsample_ispc");

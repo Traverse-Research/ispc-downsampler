@@ -1,3 +1,8 @@
+use std::{collections::HashMap, rc::Rc};
+
+use ispc::downsample_ispc::{Cache, WeightVariables};
+use ispc::WeightCollection;
+
 mod ispc;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -35,12 +40,128 @@ impl<'a> Image<'a> {
     }
 }
 
-/// Runs the ISPC kernel on the source image, sampling it down to the `target_width` and `target_height`. Returns the downsampled pixel data as a `Vec<u8>`.
+// Defines a line of weights. `coefficients` contains a weight for each pixel after `start`
+#[derive(Debug, Clone)]
+struct CachedWeight {
+    pub start: u32,
+    pub coefficients: Rc<Vec<f32>>,
+}
+
+pub(crate) fn calculate_weights(src: u32, target: u32, filter_scale: f32) -> Vec<CachedWeight> {
+    assert!(
+        src > target,
+        "Trying to use downsampler to upsample or perform an operation which will cause no changes"
+    );
+    // Every line of weights is based on the start and end of the line, and its "center" which has the biggest weight.
+    // These weight lines follow a pattern, so we can skip calculating some of them by caching all different line we get.
+    // For that purpose, we first determine the variables which define the line.
+    let mut variables = vec![WeightVariables::default(); target as usize];
+
+    unsafe {
+        ispc::downsample_ispc::calculate_weight_variables(
+            filter_scale,
+            src,
+            target,
+            variables.as_mut_ptr(),
+        );
+    }
+
+    let image_scale = src as f32 / target as f32;
+
+    let mut res = Vec::with_capacity(target as usize);
+
+    // We cache the weights in a map so that we can reuse them as we need.
+    // Half of the total number of weights seems like a good starting point to avoid unnecessary copies when resizing.
+    let mut reuse_heap = HashMap::<_, Rc<Vec<f32>>>::with_capacity(target as usize / 2);
+
+    for v in variables.iter() {
+        let coefficient_count = (v.src_end - v.src_start + 1.0) as u32;
+        // The unique values that define a collection of cached weights are how many pixels it includes and the distance from its start to its center.
+        // We use them to create a key based on which we reuse ones we've calculated previously.
+        let reuse_key = (
+            coefficient_count,
+            (v.src_center - v.src_start).to_ne_bytes(),
+        );
+
+        let reused = reuse_heap.get(&reuse_key);
+
+        // If there is already a weight line calculated for that key, we clone it since it's an `Rc`.
+        // If there isn't, we calculate the weights and add them to the reuse heap.
+        let coefficients = if let Some(coefficients) = reused {
+            coefficients.clone()
+        } else {
+            let mut coefficients = vec![0.0; coefficient_count as usize];
+            unsafe {
+                ispc::downsample_ispc::calculate_weights(
+                    image_scale,
+                    filter_scale,
+                    v as *const _,
+                    coefficients.as_mut_ptr(),
+                );
+            }
+            let coefficients = Rc::new(coefficients);
+            reuse_heap.insert(reuse_key, coefficients.clone());
+            coefficients
+        };
+
+        let cached = CachedWeight {
+            start: v.src_start as u32,
+            coefficients,
+        };
+
+        res.push(cached);
+    }
+
+    res
+}
+
+/// Samples the provided image down to the specified width and height.
+/// `target_width` and `target_height` are expected to be less than or equal to their `src` counter parts.
+/// Will panic if the target dimensions are the same as the source image's.
 ///
-/// Will panic if the target width or height are higher than that of the source image.
+/// For a more fine-tunable version of this function, see [downsample_with_custom_scale].
 pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
+    downsample_with_custom_scale(src, target_width, target_height, 3.0)
+}
+
+/// Version of [downsample] which allows for a custom filter scale, thus trading between speed and final image quality.
+///
+/// `filter_scale` controls how many samples are made relative to the size ratio between the source and target resolutions.
+/// The higher the scale, the more detail is preserved, but the slower the downsampling is. Note that the effect on the detail becomes smaller the higher the scale is.
+///
+/// As a guideline, a `filter_scale` of 3.0 preserves detail well.
+/// A scale of 1.0 preserves is good if speed is necessary, but still preserves a decent amount of detail.
+/// Anything below is even faster, although the loss of detail becomes clear.
+pub fn downsample_with_custom_scale(
+    src: &Image,
+    target_width: u32,
+    target_height: u32,
+    filter_scale: f32,
+) -> Vec<u8> {
+    assert!(src.width != target_width || src.height != target_height, "Trying to downsample to an image of the same resolution as the source image. This operation can be avoided.");
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
-    assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
+    assert!(src.height >= target_height, "The height of the source image is less than the target's height. You are trying to upsample rather than downsample");
+    assert!(
+        filter_scale > 0.0,
+        "filter_scale must be more than 0.0 when downsampling."
+    );
+
+    // The weights are calculated per-axis, and are only based on the source and target dimensions of that axis.
+    // Because of that, if both axes have the same source and target dimensions, they will have the same weights.
+    let width_weights =
+        WeightCollection::new(calculate_weights(src.width, target_width, filter_scale));
+    let height_weights = if src.width == src.height && target_width == target_height {
+        width_weights.clone()
+    } else {
+        WeightCollection::new(calculate_weights(src.height, target_height, filter_scale))
+    };
+
+    // The new implementation needs a src_height * target_width intermediate buffer.
+    let mut scratch_space = Vec::new();
+    scratch_space.resize(
+        (src.height * target_width * src.format.num_channels() as u32) as usize,
+        0u8,
+    );
 
     let mut output = Vec::new();
     output.resize(
@@ -48,17 +169,34 @@ pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8>
         0,
     );
 
+    let weight_cache = Cache {
+        vertical_weights: width_weights.ispc_representation(),
+        horizontal_weights: height_weights.ispc_representation(),
+    };
     unsafe {
-        ispc::downsample_ispc::resample(
-            src.width,
-            src.height,
-            src.width,
-            src.format.num_channels(),
-            target_width,
-            target_height,
-            src.pixels.as_ptr(),
-            output.as_mut_ptr(),
-        )
+        if src.format.num_channels() == 3 {
+            ispc::downsample_ispc::resample_with_cache_3(
+                src.width,
+                src.height,
+                target_width,
+                target_height,
+                &weight_cache as *const _,
+                scratch_space.as_mut_ptr(),
+                src.pixels.as_ptr(),
+                output.as_mut_ptr(),
+            );
+        } else {
+            ispc::downsample_ispc::resample_with_cache_4(
+                src.width,
+                src.height,
+                target_width,
+                target_height,
+                &weight_cache as *const _,
+                scratch_space.as_mut_ptr(),
+                src.pixels.as_ptr(),
+                output.as_mut_ptr(),
+            );
+        }
     }
 
     output
