@@ -133,10 +133,9 @@ void clean_and_write_4_channels(varying float<4> color, varying uint64 write_add
     *pixel_ptr4 = color;
 }
 
-/// scratch_space must be at least src_height * target_width pixels big
-export void resample_with_cache_3(uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height,
+
+void resample_with_cache(uniform uint32 num_channels, uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height,
     uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
-    uniform const uint32 num_channels = 3;
     uniform WeightCollection * uniform vertical_weight_collection = &cache->vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = &cache->horizontal_weights;
 
@@ -147,18 +146,25 @@ export void resample_with_cache_3(uniform uint32 src_width, uniform uint32 src_h
         uint32 num_horizontal_weights = horizontal_weight_collection->weight_counts[x];
         float* horizontal_weights = horizontal_weight_collection->values[x];
 
-        float<3> color = {0.0f, 0.0f, 0.0f};
+        float<3> color3 = {0.0f, 0.0f, 0.0f};
+        float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
         for (uint32 i = 0; i < num_horizontal_weights; i++) {
             float weight = horizontal_weights[i];
             uint32 src_x = src_width_start + i;
             uint64 src_read_address = (y * src_width + src_x) * num_channels;
 
-            color += sample_3_channels(src_read_address, src_data) * weight;
+            if (num_channels == 3)
+                color3 += sample_3_channels(src_read_address, src_data) * weight;
+            else
+                color4 += sample_4_channels(src_read_address, src_data) * weight;
         }
 
         uint64 scratch_write_address = (y * target_width + x) * num_channels;
 
-        clean_and_write_3_channels(color, scratch_write_address, scratch_space);
+        if (num_channels == 3)
+            clean_and_write_3_channels(color3, scratch_write_address, scratch_space);
+        else
+            clean_and_write_4_channels(color4, scratch_write_address, scratch_space);
     }
 
     // Accumulate the scratch space data along the height
@@ -169,7 +175,8 @@ export void resample_with_cache_3(uniform uint32 src_width, uniform uint32 src_h
         uint32 num_vertical_weights = vertical_weight_collection->weight_counts[y];
         float* vertical_weights = vertical_weight_collection->values[y];
 
-        float<3> color = {0.0f, 0.0f, 0.0f};
+        float<3> color3 = {0.0f, 0.0f, 0.0f};
+        float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
         for (uint32 i = 0; i < num_vertical_weights; i++) {
             float weight = vertical_weights[i];
             uint32 scratch_y = src_height_start + i;
@@ -178,66 +185,31 @@ export void resample_with_cache_3(uniform uint32 src_width, uniform uint32 src_h
             uniform uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space + scratch_read_address);
             uint8<3> scratch_color = *scratch_pixel_ptr;
 
-            color += sample_3_channels(scratch_read_address, scratch_space) * weight;
+            if (num_channels == 3)
+                color3 += sample_3_channels(scratch_read_address, scratch_space) * weight;
+            else
+                color4 += sample_4_channels(scratch_read_address, scratch_space) * weight;
         }
 
         uint64 out_write_address = (y * target_height + x) * num_channels;
 
-        clean_and_write_3_channels(color, out_write_address, out_data);
+        if (num_channels == 3)
+            clean_and_write_3_channels(color3, out_write_address, out_data);
+        else
+            clean_and_write_4_channels(color4, out_write_address, out_data);
     }
+}
+
+/// scratch_space must be at least src_height * target_width pixels big
+export void resample_with_cache_3(uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height,
+    uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
+    uniform const uint32 num_channels = 3;
+    resample_with_cache(num_channels, src_width, src_height, target_width, target_height, cache, scratch_space, src_data, out_data);
 }
 
 /// scratch_space must be at least src_height * target_width pixels big
 export void resample_with_cache_4(uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height,
     uniform const Cache * uniform cache, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
     uniform const uint32 num_channels = 4;
-
-    uniform WeightCollection * uniform vertical_weight_collection = &cache->vertical_weights;
-    uniform WeightCollection * uniform horizontal_weight_collection = &cache->horizontal_weights;
-
-    // Accumulate only along the width for each pixel, sampling from the source image
-    // Results in the source image being downsampled to src_height X target_width
-    foreach_tiled(y =  0 ... src_height, x = 0 ... target_width) {
-        uint32 src_width_start = horizontal_weight_collection->starts[x];
-        uint32 num_horizontal_weights = horizontal_weight_collection->weight_counts[x];
-        float* horizontal_weights = horizontal_weight_collection->values[x];
-
-        float<4> color = {0.0f, 0.0f, 0.0f, 0.0f};
-        for (uint32 i = 0; i < num_horizontal_weights; i++) {
-            float weight = horizontal_weights[i];
-            uint32 src_x = src_width_start + i;
-            uint64 src_read_address = (y * src_width + src_x) * num_channels;
-
-            color += sample_4_channels(src_read_address, src_data) * weight;
-        }
-
-        uint64 scratch_write_address = (y * target_width + x) * num_channels;
-
-        clean_and_write_4_channels(color, scratch_write_address, scratch_space);
-    }
-
-    // Accumulate the scratch space data along the height
-    // Downsamples the src_height X target_width image to target_height * target_width
-    foreach_tiled(y =  0 ... target_height, x = 0 ... target_width) {
-
-        uint32 src_height_start = vertical_weight_collection->starts[y];
-        uint32 num_vertical_weights = vertical_weight_collection->weight_counts[y];
-        float* vertical_weights = vertical_weight_collection->values[y];
-
-        float<4> color = {0.0f, 0.0f, 0.0f, 0.0f};
-        for (uint32 i = 0; i < num_vertical_weights; i++) {
-            float weight = vertical_weights[i];
-            uint32 scratch_y = src_height_start + i;
-            uint64 scratch_read_address = (scratch_y * target_width + x) * num_channels;
-
-            uniform uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space + scratch_read_address);
-            uint8<3> scratch_color = *scratch_pixel_ptr;
-
-            color += sample_4_channels(scratch_read_address, scratch_space) * weight;
-        }
-
-        uint64 out_write_address = (y * target_height + x) * num_channels;
-
-        clean_and_write_4_channels(color, out_write_address, out_data);
-    }
+    resample_with_cache(num_channels, src_width, src_height, target_width, target_height, cache, scratch_space, src_data, out_data);
 }
