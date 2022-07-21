@@ -90,7 +90,7 @@ struct Cache {
 };
 
 uint8<3> sample_3_channels(varying uint64 read_address, const uniform uint8* varying src) {
-    // Pointer hacks to read all channels at once rather than one-by-one, despite technically reading uint8<3> to a uint8<4>.
+    // Memory reinterpretation to read all channels at once rather than one-by-one.
     // While testing, this proved more performant than reading one-by-one.
     const uniform uint8* pixel_ptr = src + read_address;
     const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
@@ -101,17 +101,12 @@ uint8<3> sample_3_channels(varying uint64 read_address, const uniform uint8* var
 
 void clean_and_write_3_channels(varying float<3> color, varying uint64 write_address, uniform uint8* varying dst) {
     // The final color is a sum of numbers that are multiplied by the weights of their respective pixels.
-    // Because of their numbers, floating point precision leads to the final color being potentially outside of the 0-255 range by a slighty margin.
+    // Because of their numbers, floating point precision leads to the final color being potentially outside of the 0-255 range by a slight margin.
     // This would cause an underflow/overflow, which we avoid with the clamps.
-    color.x = clamp(color.x, 0.0f, 255.0f);
-    color.y = clamp(color.y, 0.0f, 255.0f);
-    color.z = clamp(color.z, 0.0f, 255.0f);
-
-    // Pointer hacks to write all channels at once rather than one-by-one, despite technically writing uint8<4> to a uint8<3>.
-    // While testing, this proved more performant than writing one-by-one.
     uniform uint8* pixel_ptr = dst + write_address;
-    uniform uint8<3>* pixel_ptr3 = (uniform uint8<3>*)(pixel_ptr);
-    *pixel_ptr3 = color;
+    pixel_ptr[0] = clamp(color[0], 0.0f, 255.0f);
+    pixel_ptr[1] = clamp(color[1], 0.0f, 255.0f);
+    pixel_ptr[2] = clamp(color[2], 0.0f, 255.0f);
 }
 
 uint8<4> sample_4_channels(varying uint64 read_address, const uniform uint8* varying src) {
@@ -123,14 +118,11 @@ uint8<4> sample_4_channels(varying uint64 read_address, const uniform uint8* var
 }
 
 void clean_and_write_4_channels(varying float<4> color, varying uint64 write_address, uniform uint8* varying dst) {
-    color.x = clamp(color.x, 0.0f, 255.0f);
-    color.y = clamp(color.y, 0.0f, 255.0f);
-    color.z = clamp(color.z, 0.0f, 255.0f);
-    color.w = clamp(color.w, 0.0f, 255.0f);
-
     uniform uint8* pixel_ptr = dst + write_address;
-    uniform uint8<4>* pixel_ptr4 = (uniform uint8<4>*)(pixel_ptr);
-    *pixel_ptr4 = color;
+    pixel_ptr[0] = clamp(color.x, 0.0f, 255.0f);
+    pixel_ptr[1] = clamp(color.y, 0.0f, 255.0f);
+    pixel_ptr[2] = clamp(color.z, 0.0f, 255.0f);
+    pixel_ptr[3] = clamp(color.w, 0.0f, 255.0f);
 }
 
 
