@@ -1,6 +1,6 @@
 #[cfg(feature = "ispc")]
 fn compile_bindings() {
-    use ispc_compile::{BindgenOptions, Config, MathLib, TargetISA};
+    use ispc_compile::{bindgen::builder, Config, MathLib, TargetISA};
 
     // Compile our ISPC library, this call will exit with EXIT_FAILURE if
     // compilation fails.
@@ -28,9 +28,7 @@ fn compile_bindings() {
         .woff()
         .target_isas(target_isas)
         .math_lib(MathLib::Fast)
-        .bindgen_options(BindgenOptions {
-            allowlist_functions: vec!["resample".into()],
-        })
+        .bindgen_builder(builder().allowlist_function("resample"))
         .out_dir("src/ispc")
         .compile("downsample_ispc");
 }
