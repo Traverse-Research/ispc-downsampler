@@ -7,6 +7,8 @@ mod ispc;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum Format {
+    R8,
+    Rg8,
     Rgb8,
     Srgb8,
     Rgba8,
@@ -15,6 +17,8 @@ pub enum Format {
 impl Format {
     fn num_channels(&self) -> u8 {
         match self {
+            Self::R8 => 1,
+            Self::Rg8 => 2,
             Self::Rgb8 | Self::Srgb8 => 3,
             Self::Rgba8 | Self::Srgba8 => 4,
         }

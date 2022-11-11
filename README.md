@@ -18,7 +18,7 @@ The crate comes with the bindings and precompiled libraries for Windows, Linux a
 
 ## Usage
 
-Create a new `ispc_downsampler::Image` from a slice of the texture's pixels, the dimensions of the source image, and the format it is in. Currently only works with RGB8 and RGBA8 textures.
+Create a new `ispc_downsampler::Image` from a slice of the texture's pixels, the dimensions of the source image, and the format it is in.
 Call `ispc_downsampler::downsample` with the source image, and the target dimension for downsampled image. The function will return a `Vec<u8>` with the pixels of the downsampled image in the same format as the source image.
 
 #### Example
