@@ -23,7 +23,7 @@ jobs:
           echo "$PWD" >> $GITHUB_PATH
 
       - name: Install additional targets
-        run: rustup target add aarch64-unknown-linux-gnu aarch64-linux-android
+        run: rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-gnu aarch64-unknown-linux-musl aarch64-linux-android
 
       - name: Install GCC multilib for headers
         run: |
@@ -33,7 +33,9 @@ jobs:
       - name: Build binaries
         run: |
           cargo build --features=ispc --target x86_64-unknown-linux-gnu
+          cargo build --features=ispc --target x86_64-unknown-linux-musl
           cargo build --features=ispc --target aarch64-unknown-linux-gnu
+          cargo build --features=ispc --target aarch64-unknown-linux-musl
           cargo build --features=ispc --target aarch64-linux-android
 
       - uses: actions/upload-artifact@v3
