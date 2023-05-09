@@ -1,5 +1,5 @@
 {
-    "editor.renderFinalNewline": true,
+    "editor.renderFinalNewline": "on",
     "files.trimFinalNewlines": true,
     "files.trimTrailingWhitespace": true,
     "files.insertFinalNewline": true,
