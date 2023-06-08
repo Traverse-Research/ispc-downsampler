@@ -31,7 +31,10 @@ fn compile_bindings() {
         .math_lib(MathLib::Fast)
         .bindgen_builder(
             builder()
-                .allowlist_function("resample")
+                .allowlist_function("resample_with_cached_weights_3")
+                .allowlist_function("resample_with_cached_weights_4")
+                .allowlist_function("calculate_weights")
+                .allowlist_function("calculate_weight_variables")
                 .allowlist_function("scale_to_alpha_coverage"),
         )
         .out_dir("src/ispc")
