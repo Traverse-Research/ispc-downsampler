@@ -41,20 +41,24 @@ impl<'a> Image<'a> {
     /// Computes the percentage of texels that are visible in an alpha masked texture using
     /// 4x4 subsampling.
     /// Ported version of implementation in https://github.com/castano/nvidia-texture-tools/.
-    pub fn calculate_alpha_coverage(&self, alpha_cutoff: f32) -> f32 {
+    pub fn calculate_alpha_coverage(&self, alpha_cutoff: Option<f32>) -> f32 {
         self.calculate_scaled_alpha_coverage(alpha_cutoff, 1.0f32)
     }
 
-    fn calculate_scaled_alpha_coverage(&self, alpha_cutoff: f32, scale: f32) -> f32 {
+    fn calculate_scaled_alpha_coverage(&self, alpha_cutoff: Option<f32>, scale: f32) -> f32 {
+        // Edge-case for if the texture is downsampled to 1x1
+        if self.width == 1 && self.height == 1 {
+            return 0f32;
+        }
         let mut coverage = 0.0f32;
         let subsample_factor = 4;
 
         for y in 0..(self.height as usize) - 1 {
             for x in 0..(self.width as usize) - 1 {
-                let top_left = (self.get_alpha(x, y) * scale).min(255.0);
-                let top_right = (self.get_alpha(x + 1, y) * scale).min(255.0);
-                let bottom_left = (self.get_alpha(x, y + 1) * scale).min(255.0);
-                let bottom_right = (self.get_alpha(x + 1, y + 1) * scale).min(255.0);
+                let top_left = (self.get_alpha(x, y) * scale).min(1.0);
+                let top_right = (self.get_alpha(x + 1, y) * scale).min(1.0);
+                let bottom_left = (self.get_alpha(x, y + 1) * scale).min(1.0);
+                let bottom_right = (self.get_alpha(x + 1, y + 1) * scale).min(1.0);
 
                 let mut texel_coverage = 0.0;
                 for sy in 0..subsample_factor {
@@ -65,8 +69,12 @@ impl<'a> Image<'a> {
                             + top_right * fx * (1.0 - fy)
                             + bottom_left * (1.0 - fx) * fy
                             + bottom_right * fx * fy;
-                        if alpha > alpha_cutoff {
-                            texel_coverage += 1.0;
+                        if let Some(alpha_cutoff) = alpha_cutoff {
+                            if alpha > alpha_cutoff {
+                                texel_coverage += 1.0;
+                            }
+                        } else {
+                            texel_coverage += alpha
                         }
                     }
                 }
@@ -77,12 +85,19 @@ impl<'a> Image<'a> {
         coverage / ((self.width - 1) * (self.height - 1)) as f32
     }
 
-    pub fn find_alpha_scale_for_coverage(&self, desired_coverage: f32, alpha_cutoff: f32) -> f32 {
+    /// Computes the scaling factor needed for the alpha values in the texture such that the desired
+    /// coverage is best approximated
+    /// Ported version of implementation in https://github.com/castano/nvidia-texture-tools/.
+    pub fn find_alpha_scale_for_coverage(
+        &self,
+        desired_coverage: f32,
+        alpha_cutoff: Option<f32>,
+    ) -> f32 {
         let mut alpha_scale_range_start = 0.0;
 
         // This value might need exposure for tweaking
-        let mut alpha_scale_range_end = 4.0;
-        let mut alpha_scale = 1.0;
+        let mut alpha_scale_range_end = 8.0;
+        let mut alpha_scale = 4.0;
 
         // Due to the subsampling when determining the alpha coverage of an image, we can technically
         // overshoot the used alpha scale. It's therefore necessary to keep track of what was the
@@ -101,9 +116,9 @@ impl<'a> Image<'a> {
                 best_alpha_scale = alpha_scale;
             }
 
-            if coverage_diff < 0.0 {
+            if current_coverage < desired_coverage {
                 alpha_scale_range_start = alpha_scale;
-            } else if coverage_diff > 0.0 {
+            } else if current_coverage > desired_coverage {
                 alpha_scale_range_end = alpha_scale;
             } else {
                 break;
@@ -115,8 +130,8 @@ impl<'a> Image<'a> {
 }
 
 pub fn apply_alpha_scale(data: &mut [u8], alpha_scale: f32) {
-    for pixel in data.iter_mut() {
-        *pixel = (*pixel as f32 / alpha_scale).round() as u8
+    for pixel in data.iter_mut().skip(3).step_by(4) {
+        *pixel = (*pixel as f32 * alpha_scale * 255.0).min(255.0).round() as u8
     }
 }
 
@@ -124,8 +139,8 @@ pub enum AlphaCoverageSetting {
     None,
     RetainAlphaCoverage {
         target_alpha_coverage: f32,
-        alpha_cutoff: f32
-    }
+        alpha_cutoff: Option<f32>,
+    },
 }
 
 /// Runs the ISPC kernel on the source image, sampling it down to the `target_width` and `target_height`. Returns the downsampled pixel data as a `Vec<u8>`.
@@ -135,7 +150,7 @@ pub fn downsample(
     src: &Image,
     target_width: u32,
     target_height: u32,
-    target_desired_alpha_coverage: AlphaCoverageSetting
+    target_desired_alpha_coverage: AlphaCoverageSetting,
 ) -> Vec<u8> {
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
@@ -159,8 +174,13 @@ pub fn downsample(
         )
     }
 
-    if let AlphaCoverageSetting::RetainAlphaCoverage { target_alpha_coverage, alpha_cutoff } = target_desired_alpha_coverage {
-        let scale = Image::new(&output, target_width, target_height, src.format).find_alpha_scale_for_coverage(target_alpha_coverage, alpha_cutoff);
+    if let AlphaCoverageSetting::RetainAlphaCoverage {
+        target_alpha_coverage,
+        alpha_cutoff,
+    } = target_desired_alpha_coverage
+    {
+        let scale = Image::new(&output, target_width, target_height, src.format)
+            .find_alpha_scale_for_coverage(target_alpha_coverage, alpha_cutoff);
         apply_alpha_scale(&mut output, scale);
     }
 
