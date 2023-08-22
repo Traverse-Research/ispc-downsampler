@@ -1,5 +1,5 @@
 use image::{RgbImage, RgbaImage};
-use ispc_downsampler::{downsample, Format, Image};
+use ispc_downsampler::{downsample, AlphaCoverageSetting, Format, Image};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
 use std::time::Instant;
@@ -26,7 +26,17 @@ fn main() {
 
             let now = Instant::now();
             println!("Downsampling started!");
-            let downsampled_pixels = downsample(&src_img, target_width, target_height);
+            let downsampled_pixels = downsample(
+                &src_img,
+                target_width,
+                target_height,
+                match src_fmt {
+                    Format::RGB8 => AlphaCoverageSetting::None,
+                    Format::RGBA8 => AlphaCoverageSetting::RetainAlphaCoverage {
+                        alpha_cutoff: Some(0.5),
+                    },
+                },
+            );
             println!("Finished downsampling in {:.2?}!", now.elapsed());
 
             std::fs::create_dir_all("example_outputs").unwrap();
