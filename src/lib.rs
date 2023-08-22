@@ -95,9 +95,8 @@ impl<'a> Image<'a> {
     ) -> f32 {
         let mut alpha_scale_range_start = 0.0;
 
-        // This value might need exposure for tweaking
-        let mut alpha_scale_range_end = 8.0;
-        let mut alpha_scale = 4.0;
+        let mut alpha_scale_range_end = 4.0;
+        let mut alpha_scale = 2.0;
 
         // Due to the subsampling when determining the alpha coverage of an image, we can technically
         // overshoot the used alpha scale. It's therefore necessary to keep track of what was the
@@ -127,11 +126,11 @@ impl<'a> Image<'a> {
         }
         best_alpha_scale
     }
-}
+}1
 
 pub fn apply_alpha_scale(data: &mut [u8], alpha_scale: f32) {
     for pixel in data.iter_mut().skip(3).step_by(4) {
-        *pixel = (*pixel as f32 * alpha_scale * 255.0).min(255.0).round() as u8
+        *pixel = (*pixel as f32 * alpha_scale).min(255.0).round() as u8
     }
 }
 
