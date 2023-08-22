@@ -126,7 +126,7 @@ impl<'a> Image<'a> {
         }
         best_alpha_scale
     }
-}1
+}
 
 pub fn apply_alpha_scale(data: &mut [u8], alpha_scale: f32) {
     for pixel in data.iter_mut().skip(3).step_by(4) {
