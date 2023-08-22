@@ -85,7 +85,7 @@ impl<'a> Image<'a> {
         coverage / ((self.width - 1) * (self.height - 1)) as f32
     }
 
-    /// Computes the scaling factor needed for the alpha values in the texture such that the desired
+    /// Computes the scaling factor needed for the texture's alpha such that the desired
     /// coverage is best approximated
     /// Ported version of implementation in https://github.com/castano/nvidia-texture-tools/.
     pub fn find_alpha_scale_for_coverage(
@@ -95,18 +95,20 @@ impl<'a> Image<'a> {
     ) -> f32 {
         let mut alpha_scale_range_start = 0.0;
 
-        let mut alpha_scale_range_end = 4.0;
-        let mut alpha_scale = 2.0;
+        let mut alpha_scale_range_end = 8.0;
+        // Possibly better to set this to 1.0 in the general case, but discrepency will be solved in
+        // one search step while having a better result for textures that need very high alpha scaling
+        let mut alpha_scale = 4.0;
 
         // Due to the subsampling when determining the alpha coverage of an image, we can technically
-        // overshoot the used alpha scale. It's therefore necessary to keep track of what was the
+        // overshoot the used alpha scale, so we should track of what was the
         // best result so far and use that instead of the last found scale
         let mut best_abs_diff = f32::INFINITY;
         let mut best_alpha_scale = alpha_scale;
 
         // 10-step binary search for the alpha multiplier that best matches
         // the desired alpha coverage
-        for _ in 0..10 {
+        for _ in 0..12 {
             let current_coverage = self.calculate_scaled_alpha_coverage(alpha_cutoff, alpha_scale);
             let coverage_diff = current_coverage - desired_coverage;
 
@@ -136,10 +138,7 @@ pub fn apply_alpha_scale(data: &mut [u8], alpha_scale: f32) {
 
 pub enum AlphaCoverageSetting {
     None,
-    RetainAlphaCoverage {
-        target_alpha_coverage: f32,
-        alpha_cutoff: Option<f32>,
-    },
+    RetainAlphaCoverage { alpha_cutoff: Option<f32> },
 }
 
 /// Runs the ISPC kernel on the source image, sampling it down to the `target_width` and `target_height`. Returns the downsampled pixel data as a `Vec<u8>`.
@@ -173,13 +172,18 @@ pub fn downsample(
         )
     }
 
-    if let AlphaCoverageSetting::RetainAlphaCoverage {
-        target_alpha_coverage,
-        alpha_cutoff,
-    } = target_desired_alpha_coverage
+    if let AlphaCoverageSetting::RetainAlphaCoverage { alpha_cutoff } =
+        target_desired_alpha_coverage
     {
+        assert!(
+            matches!(src.format, Format::RGBA8),
+            "Cannot retain alpha coverage on image with no alpha channel"
+        );
         let scale = Image::new(&output, target_width, target_height, src.format)
-            .find_alpha_scale_for_coverage(target_alpha_coverage, alpha_cutoff);
+            .find_alpha_scale_for_coverage(
+                src.calculate_alpha_coverage(alpha_cutoff),
+                alpha_cutoff,
+            );
         apply_alpha_scale(&mut output, scale);
     }
 
