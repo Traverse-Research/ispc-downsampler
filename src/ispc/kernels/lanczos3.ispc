@@ -51,7 +51,7 @@ static inline float byte_to_float(uint b) {
     return (float)b;
 }
 
-static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, uniform float<2> target_size, uniform float<2> inv_target_size, uniform uint8 num_channels) {
+static inline uint8<4> resample_internal(uniform Image src_image, uniform float<2> inv_src_size, float<2> uv, uniform float<2> target_size, uniform float<2> inv_target_size, uniform uint8 num_channels) {
     float<2> center_pixel = uv * target_size;
     center_pixel.x = frac(center_pixel.x);
     center_pixel.y = frac(center_pixel.y);
@@ -68,7 +68,7 @@ static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, u
             float wy = lanczos3_filter((uniform float)y - offset.y);
             float w = wx * wy;
             float<2> texel_offset = {x, y};
-            float<2> texel_uv = center + texel_offset * inv_target_size;
+            float<2> texel_uv = center + texel_offset * inv_src_size;
             int<2> pixel_coord = uv_to_pixel_id(src_image.size, texel_uv);
 
             int addr = (pixel_coord.x + pixel_coord.y * src_image.size.x) * num_channels;
@@ -98,6 +98,7 @@ export void resample(uniform uint32 width, uniform uint32 height, uniform uint32
     uniform Image src = {src_data, {width, height}};
     uniform float<2> target_size = {(float)target_width, (float)target_height};
     uniform float<2> inv_target_size = {1.0 / target_width, 1.0 / target_height};
+    uniform float<2> inv_src_size = 1.0f / src.size;
 
     foreach_tiled (y = 0 ... target_height, x = 0 ... target_width) {
         float yf = y / target_size.y;
@@ -105,7 +106,7 @@ export void resample(uniform uint32 width, uniform uint32 height, uniform uint32
 
         float<2> uv = { xf, yf };
 
-        uint8<4> s = resample_internal(src, uv, target_size, inv_target_size, num_channels);
+        uint8<4> s = resample_internal(src, inv_src_size, uv, target_size, inv_target_size, num_channels);
 
         for (uniform int i = 0; i < num_channels; i++)
             out_data[(x + y * target_width) * num_channels + i] = s[i];
