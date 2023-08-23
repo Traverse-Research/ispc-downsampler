@@ -62,9 +62,8 @@ static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, u
     float<4> col = { 0, 0, 0, 0 };
     float weight = 0.0;
 
-    for(uniform int x = -3; x < 3; x++){
-        for(uniform int y = -3; y < 3; y++){
-
+    for (uniform int x = -3; x <= 3; x++) {
+        for (uniform int y = -3; y <= 3; y++) {
             float wx = lanczos3_filter((uniform float)x - offset.x);
             float wy = lanczos3_filter((uniform float)y - offset.y);
             float w = wx * wy;
