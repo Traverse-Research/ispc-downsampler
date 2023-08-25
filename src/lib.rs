@@ -95,10 +95,10 @@ impl<'a> Image<'a> {
     ) -> f32 {
         let mut alpha_scale_range_start = 0.0;
 
-        let mut alpha_scale_range_end = 8.0;
+        let mut alpha_scale_range_end = 4.0;
         // Possibly better to set this to 1.0 in the general case, but discrepency will be solved in
         // one search step while having a better result for textures that need very high alpha scaling
-        let mut alpha_scale = 4.0;
+        let mut alpha_scale = 1.0;
 
         // Due to the subsampling when determining the alpha coverage of an image, we can technically
         // overshoot the used alpha scale, so we should track of what was the
@@ -108,7 +108,7 @@ impl<'a> Image<'a> {
 
         // 10-step binary search for the alpha multiplier that best matches
         // the desired alpha coverage
-        for _ in 0..12 {
+        for _ in 0..10 {
             let current_coverage = self.calculate_scaled_alpha_coverage(alpha_cutoff, alpha_scale);
             let coverage_diff = current_coverage - desired_coverage;
 
@@ -132,7 +132,7 @@ impl<'a> Image<'a> {
 
 pub fn apply_alpha_scale(data: &mut [u8], alpha_scale: f32) {
     for pixel in data.iter_mut().skip(3).step_by(4) {
-        *pixel = (*pixel as f32 * alpha_scale).min(255.0).round() as u8
+        *pixel = (*pixel as f32 * alpha_scale).min(255.0) as u8
     }
 }
 
