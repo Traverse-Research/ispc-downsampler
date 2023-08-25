@@ -33,14 +33,6 @@ struct Image {
     uniform int<2> size;
 };
 
-static inline int<2> uv_to_pixel_id(int<2> image_size, float<2> uv) {
-    float<2> pixel_coord = uv * image_size;
-    int<2> i = {floor(pixel_coord.x + 0.5), floor(pixel_coord.y + 0.5)};
-    i.x = clamp(i.x, 0, image_size.x - 1);
-    i.y = clamp(i.y, 0, image_size.y - 1);
-    return i;
-}
-
 static inline float frac(float f) {
     float absf = abs(f);
     return absf - floor(absf);
@@ -51,9 +43,11 @@ static inline float byte_to_float(uint b) {
     return (float)b;
 }
 
-static inline uint8<4> resample_internal(uniform Image src_image, uniform float<2> inv_src_size, float<2> uv, uniform uint8 num_channels) {
-    float<4> col = { 0, 0, 0, 0 };
+static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, uniform uint8 num_channels) {
+    float<4> col = 0.0;
     float weight = 0.0;
+    // Truncate floating point coordinate to integer:
+    const int<2> src_coord = uv * src_image.size;
 
     for (uniform int x = -3; x <= 3; x++) {
         for (uniform int y = -3; y <= 3; y++) {
@@ -62,11 +56,14 @@ static inline uint8<4> resample_internal(uniform Image src_image, uniform float<
             float wx = lanczos3_filter((uniform float)x + lanczos3_offset);
             float wy = lanczos3_filter((uniform float)y + lanczos3_offset);
             float w = wx * wy;
-            float<2> texel_offset = {x, y};
-            float<2> texel_uv = uv + texel_offset * inv_src_size;
-            int<2> pixel_coord = uv_to_pixel_id(src_image.size, texel_uv);
+            int<2> texel_offset = {x, y};
+            int<2> src_kernel_coord = src_coord + texel_offset;
+            // TODO: Let the user specify a boundary mode!
+            // https://github.com/Traverse-Research/ispc-downsampler/issues/25#issuecomment-1584915050
+            src_kernel_coord.x = clamp(src_kernel_coord.x, 0, src_image.size.x - 1);
+            src_kernel_coord.y = clamp(src_kernel_coord.y, 0, src_image.size.y - 1);
 
-            int addr = (pixel_coord.x + pixel_coord.y * src_image.size.x) * num_channels;
+            int addr = (src_kernel_coord.x + src_kernel_coord.y * src_image.size.x) * num_channels;
 
             float<4> texel;
 
@@ -95,7 +92,6 @@ export void resample(uniform uint32 width, uniform uint32 height, uniform uint32
     uniform Image src = {src_data, {width, height}};
     uniform float<2> target_size = {(float)target_width, (float)target_height};
     uniform float<2> inv_target_size = 1.0f / target_size;
-    uniform float<2> inv_src_size = 1.0f / src.size;
 
     foreach_tiled (y = 0 ... target_height, x = 0 ... target_width) {
         float<2> uv = {x, y};
@@ -104,7 +100,7 @@ export void resample(uniform uint32 width, uniform uint32 height, uniform uint32
         // Convert to uniform space:
         uv *= inv_target_size;
 
-        uint8<4> s = resample_internal(src, inv_src_size, uv, num_channels);
+        uint8<4> s = resample_internal(src, uv, num_channels);
 
         for (uniform int i = 0; i < num_channels; i++)
             out_data[(x + y * target_width) * num_channels + i] = s[i];
