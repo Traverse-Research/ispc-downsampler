@@ -2,6 +2,7 @@
 
 const uniform float M_PI = 3.14159265358979f;
 const uniform float GAMMA = 2.2f;
+const uniform float DEGAMMA = 1.0f / GAMMA;
 
 struct Parameters {
     // Whether to linearize the input before downsampling.  Assumes the input has a gamma of 1/2.2
@@ -40,28 +41,21 @@ static inline uniform float lanczos3_filter(uniform float t)
         return 0.0f;
 }
 
-static inline float byte_to_float(uint8 b, uniform bool degamma) {
+static inline float byte_to_float(uint8 b/*, uniform bool degamma*/) {
     const uniform float inv_255 = rcp(255.0);
-
     // floatbits(0x3f800000 | (b << (23 - 8))) - 1.0;
-    float d = (float)b * inv_255;
-
-    if (degamma) {
-        d = pow(d, GAMMA);
-    }
-
-    return d;
+    return (float)b * inv_255;
 }
 
-static inline uint8 float_to_byte(float d, uniform bool gamma) {
+static inline uint8 float_to_byte(float d, bool gamma) {
     if (gamma) {
-        d = pow(d, 1.0f / GAMMA);
+        d = pow(d, DEGAMMA);
     }
     int b = d * 255;
     return clamp(b, 0, 255);
 }
 
-static inline uint8<4> resample_internal(const uniform Parameters params, const uniform Image src_image, const float<2> uv, const uniform uint8 num_channels) {
+static inline float<4> resample_internal(const uniform Image src_image, const float<2> uv, const uniform uint8 num_channels) {
     float<4> col = 0.0;
     uniform float weight = 0.0;
     // Truncate floating point coordinate to integer:
@@ -87,28 +81,19 @@ static inline uint8<4> resample_internal(const uniform Parameters params, const 
             const int addr = (src_kernel_coord.x + src_kernel_coord.y * src_image.size.x) * num_channels;
 
             float<4> texel;
-            if (num_channels == 3) {
-                texel.x = byte_to_float(src_image.data[addr + 0], params.degamma);
-                texel.y = byte_to_float(src_image.data[addr + 1], params.degamma);
-                texel.z = byte_to_float(src_image.data[addr + 2], params.degamma);
-            } else if (num_channels == 4) {
-                texel.x = byte_to_float(src_image.data[addr + 0], params.degamma);
-                texel.y = byte_to_float(src_image.data[addr + 1], params.degamma);
-                texel.z = byte_to_float(src_image.data[addr + 2], params.degamma);
-                texel.w = byte_to_float(src_image.data[addr + 3], params.degamma);
-            }
+            texel.x = byte_to_float(src_image.data[addr + 0]);
+            texel.y = byte_to_float(src_image.data[addr + 1]);
+            texel.z = byte_to_float(src_image.data[addr + 2]);
+            if (num_channels >= 4)
+                texel.w = byte_to_float(src_image.data[addr + 3]);
 
             col += w * texel;
             weight += w;
         }
     }
     col /= weight;
+    return col;
 
-    uint8<4> res;
-    for (uniform int i = 0; i < num_channels; i++)
-        res[i] = float_to_byte(col[i], params.gamma);
-
-    return res;
 }
 
 export void resample(
@@ -120,6 +105,18 @@ export void resample(
 ) {
     const uniform float<2> inv_target_size = 1.0f / dst->size;
 
+    if (params->degamma) {
+        foreach_tiled(y = 0 ... src->size.y, x = 0 ... src->size.x)
+        {
+            uint p = (x + y * src->size.x) * num_channels;
+            for (uniform int i = 0; i < num_channels; i++) {
+                uint c = p + i;
+                // TODO: This texture should be writeonly!
+                src->data[c] = float_to_byte(pow(byte_to_float(src->data[c]), GAMMA), false);
+            }
+        }
+    }
+
     foreach_tiled (y = 0 ... dst->size.y, x = 0 ... dst->size.x) {
         float<2> uv = {x, y};
         // Use the center of each pixel, not the top-left:
@@ -127,9 +124,9 @@ export void resample(
         // Convert to uniform space:
         uv *= inv_target_size;
 
-        const uint8<4> s = resample_internal(*params, *src, uv, num_channels);
+        const float<4> col = resample_internal(*src, uv, num_channels);
 
         for (uniform int i = 0; i < num_channels; i++)
-            dst->data[(x + y * dst->size.x) * num_channels + i] = s[i];
+            dst->data[(x + y * dst->size.x) * num_channels + i] = float_to_byte(col[i], params->gamma);
     }
 }
