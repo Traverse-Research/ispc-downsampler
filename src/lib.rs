@@ -38,13 +38,13 @@ impl<'a> Image<'a> {
         self.pixels[x * 4 + 3 + y * 4 * self.width as usize] as f32 / 255.0
     }
 
-    /// Computes the percentage of texels that are visible in an alpha masked texture using
-    /// 4x4 subsampling.
-    /// Ported version of implementation in https://github.com/castano/nvidia-texture-tools/.
     pub fn calculate_alpha_coverage(&self, alpha_cutoff: Option<f32>) -> f32 {
         self.calculate_scaled_alpha_coverage(alpha_cutoff, 1.0f32)
     }
 
+    /// Computes the percentage of texels that are visible in an alpha masked texture using
+    /// 4x4 subsampling.
+    /// Ported version of implementation in https://github.com/castano/nvidia-texture-tools/.
     fn calculate_scaled_alpha_coverage(&self, alpha_cutoff: Option<f32>, scale: f32) -> f32 {
         // Edge-case for if the texture is downsampled to 1x1
         if self.width == 1 && self.height == 1 {
