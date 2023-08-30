@@ -183,12 +183,19 @@ pub fn downsample(
             matches!(src.format, Format::RGBA8),
             "Cannot retain alpha coverage on image with no alpha channel"
         );
-        let scale = Image::new(&output, target_width, target_height, src.format)
-            .find_alpha_scale_for_coverage(
-                src.calculate_alpha_coverage(alpha_cutoff),
-                alpha_cutoff,
+        unsafe {
+            ispc::downsample_ispc::scale_to_alpha_coverage(
+                src.width,
+                src.height,
+                src.pixels.as_ptr(),
+                target_width,
+                target_height,
+                output.as_mut_ptr(),
+                //alpha_cutoff
+                //.as_ref()
+                //.map_or(std::ptr::null(), |alpha_cutoff| alpha_cutoff),
             );
-        apply_alpha_scale(&mut output, scale);
+        }
     }
 
     output

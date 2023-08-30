@@ -2,19 +2,19 @@
 
 float get_alpha(uniform Image image, uint64 x, uint64 y) {
     uint64 pixel_index = x * y;
-    return image.data[pixel_index * 4 + 3];
+    return (float)image.data[pixel_index * 4 + 3] / 255.0f;
 }
 
 uniform float calculate_scaled_alpha_coverage(uniform Image image, uniform float* uniform alpha_cutoff, uniform float scale) {
     // Edge-case for if the texture is downsampled to 1x1
-    if (image.size[0] == 1 && image.size[1]== 1) {
+    if (image.size.x == 1 && image.size.y == 1) {
         return 0.0f;
     }
     float coverage = 0.0f;
     const uniform int subsample_factor = 4;
 
-    for (uniform uint64 y = 0; y <= image.size[1] - 1; y++) {
-        for (uniform uint64 x = 0; x <= image.size[0] - 1; x++) {
+    for (uniform uint64 y = 0; y <= image.size.y - 1; y++) {
+        for (uniform uint64 x = 0; x <= image.size.x - 1; x++) {
             float top_left = min((get_alpha(image, x, y) * scale), 1.0);
             float top_right = min((get_alpha(image, x + 1, y) * scale), 1.0);
             float bottom_left = min((get_alpha(image, x, y + 1) * scale), 1.0);
@@ -44,7 +44,7 @@ uniform float calculate_scaled_alpha_coverage(uniform Image image, uniform float
         }
     }
 
-    return reduce_add(coverage) / (float)((image.size[0] - 1) * (image.size[1] - 1));
+    return reduce_add(coverage) / (float)((image.size.x - 1) * (image.size.y- 1));
 }
 
 uniform float calculate_alpha_coverage(uniform Image image, uniform float* uniform alpha_cutoff) {
@@ -56,11 +56,7 @@ const uniform float INFINITY = 1.0f / 0.0f;
 /// Computes the scaling factor needed for the texture's alpha such that the desired
 /// coverage is best approximated
 /// Ported version of implementation in https://github.com/castano/nvidia-texture-tools/.
-uniform float find_alpha_scale_for_coverage(
-    uniform Image image,
-    uniform float desired_coverage,
-    uniform float* uniform alpha_cutoff
-)  {
+uniform float find_alpha_scale_for_coverage(uniform Image image, uniform float desired_coverage, uniform float* uniform alpha_cutoff)  {
     // This range of potential scale values is an estimate. Especially the upper bound
     // may not be sufficient for some use-cases, depending on the downscale
     // compared to mip 0
@@ -100,17 +96,26 @@ uniform float find_alpha_scale_for_coverage(
     return best_alpha_scale;
 }
 
-export void scale_to_alpha_coverage(uniform uint32 source_width, uniform uint32 source_height,
-    uniform const uint8 source_data[],
-    uniform uint32 downsampled_width,
-    uniform uint32 downsampled_height,
-    uniform const uint8 downsampled_image_data[],
-    uniform uint8 out_data[],
-    uniform float* uniform alpha_cutoff
-    ) {
+void apply_alpha_scale(uniform Image image, uniform float scale) {
+    for (uniform uint64 y = 0; y < image.size.y; y++) {
+        for (uniform uint64 x = 0; x < image.size.x; x++) {
+            uint64 pixel_index = x + y * image.size.x;
+            uint64 alpha_value_index = pixel_index * 4 + 3;
+
+            float original_alpha = get_alpha(image, x, y);
+            image.data[alpha_value_index] = (uint8)min(255.0f, (float)original_alpha * scale * 255.0f);
+        }
+    }
+}
+
+export uniform void scale_to_alpha_coverage(uniform uint32 source_width, uniform uint32 source_height, uniform const uint8 source_data[],
+    uniform uint32 downsampled_width, uniform uint32 downsampled_height, uniform uint8 downsampled_image_data[]
+    /*const uniform float* uniform alpha_cutoff*/) {
     uniform Image source = { source_data, {source_width, source_height}};
     uniform Image downsampled = { downsampled_image_data, {downsampled_width, downsampled_height}};
 
-    uniform float coverage = calculate_alpha_coverage(source, alpha_cutoff);
-
+    uniform float cutoff = 0.5f;
+    uniform float coverage = calculate_alpha_coverage(source, &cutoff);
+    uniform float scale = find_alpha_scale_for_coverage(downsampled, coverage, &cutoff);
+    apply_alpha_scale(downsampled, scale);
 }
