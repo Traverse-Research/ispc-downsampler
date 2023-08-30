@@ -24,13 +24,18 @@ fn compile_bindings() {
 
     Config::new()
         .file("src/ispc/kernels/lanczos3.ispc")
+        .file("src/ispc/kernels/rescale_alpha.ispc")
         .opt_level(2)
         .woff()
         .target_isas(target_isas)
         .math_lib(MathLib::Fast)
-        .bindgen_builder(builder().allowlist_function("resample"))
+        .bindgen_builder(
+            builder()
+                .allowlist_function("resample")
+                .allowlist_function("rescale_alpha"),
+        )
         .out_dir("src/ispc")
-        .compile("downsample_ispc");
+        .compile("downsample_ispc")
 }
 
 #[cfg(not(feature = "ispc"))]
