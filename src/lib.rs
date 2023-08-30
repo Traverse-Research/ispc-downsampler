@@ -35,10 +35,11 @@ impl<'a> Image<'a> {
     }
 
     fn get_alpha(&self, x: usize, y: usize) -> f32 {
-        self.pixels[x * 4 + 3 + y * 4 * self.width as usize] as f32 / 255.0
+        let pixel_index = x + y * self.width as usize;
+        self.pixels[pixel_index * 4 + 3] as f32 / 255.0
     }
 
-    pub fn calculate_alpha_coverage(&self, alpha_cutoff: Option<f32>) -> f32 {
+    fn calculate_alpha_coverage(&self, alpha_cutoff: Option<f32>) -> f32 {
         self.calculate_scaled_alpha_coverage(alpha_cutoff, 1.0f32)
     }
 
@@ -88,7 +89,7 @@ impl<'a> Image<'a> {
     /// Computes the scaling factor needed for the texture's alpha such that the desired
     /// coverage is best approximated
     /// Ported version of implementation in https://github.com/castano/nvidia-texture-tools/.
-    pub fn find_alpha_scale_for_coverage(
+    fn find_alpha_scale_for_coverage(
         &self,
         desired_coverage: f32,
         alpha_cutoff: Option<f32>,
@@ -133,7 +134,7 @@ impl<'a> Image<'a> {
     }
 }
 
-pub fn apply_alpha_scale(data: &mut [u8], alpha_scale: f32) {
+fn apply_alpha_scale(data: &mut [u8], alpha_scale: f32) {
     for pixel in data.iter_mut().skip(3).step_by(4) {
         *pixel = (*pixel as f32 * alpha_scale).min(255.0) as u8
     }
@@ -148,7 +149,7 @@ pub enum AlphaCoverageSetting {
 ///
 /// Will panic if the target width or height are higher than that of the source image.
 pub fn downsample(
-    src: &Image,
+    src: &Image<'_>,
     target_width: u32,
     target_height: u32,
     target_desired_alpha_coverage: AlphaCoverageSetting,
