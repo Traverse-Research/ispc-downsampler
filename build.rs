@@ -32,7 +32,7 @@ fn compile_bindings() {
         .bindgen_builder(
             builder()
                 .allowlist_function("resample")
-                .allowlist_function("rescale_alpha"),
+                .allowlist_function("scale_to_alpha_coverage"),
         )
         .out_dir("src/ispc")
         .compile("downsample_ispc")
