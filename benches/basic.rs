@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use ispc_downsampler::{downsample, AlphaCoverageSetting, Format, Image};
+use ispc_downsampler::{downsample, Format, Image};
 use resize::{px::RGB, Type::Lanczos3};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
@@ -18,14 +18,7 @@ pub fn ispc_downsampler(c: &mut Criterion) {
         let target_height = (img.height / 4) as u32;
 
         c.bench_function("Downsample `square_test.png` using ispc_downsampler", |b| {
-            b.iter(|| {
-                downsample(
-                    &src_img,
-                    target_width,
-                    target_height,
-                    AlphaCoverageSetting::None,
-                )
-            })
+            b.iter(|| downsample(&src_img, target_width, target_height))
         });
     }
 }
