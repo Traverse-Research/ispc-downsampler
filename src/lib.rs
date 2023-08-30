@@ -93,16 +93,19 @@ impl<'a> Image<'a> {
         desired_coverage: f32,
         alpha_cutoff: Option<f32>,
     ) -> f32 {
+        // This range of potential scale values is an estimate. Especially the upper bound
+        // may not be sufficient for some use-cases, depending on the downscale
+        // compared to mip 0
+        // TO-DO: Figure out if this should be exposed
         let mut alpha_scale_range_start = 0.0;
+        let mut alpha_scale_range_end = 8.0;
 
-        let mut alpha_scale_range_end = 4.0;
-        // Possibly better to set this to 1.0 in the general case, but discrepency will be solved in
-        // one search step while having a better result for textures that need very high alpha scaling
         let mut alpha_scale = 1.0;
 
-        // Due to the subsampling when determining the alpha coverage of an image, we can technically
-        // overshoot the used alpha scale, so we should track of what was the
-        // best result so far and use that instead of the last found scale
+        // The search is done heuristically, so a tested alpha scale value
+        // does not directly map to the resulting alpha coverage. To ensure,
+        // we do not overwrite the best result, store
+        // the best result so far and use that instead of the last found scale
         let mut best_abs_diff = f32::INFINITY;
         let mut best_alpha_scale = alpha_scale;
 
