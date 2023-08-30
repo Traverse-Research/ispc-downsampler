@@ -145,15 +145,36 @@ pub enum AlphaCoverageSetting {
     RetainAlphaCoverage { alpha_cutoff: Option<f32> },
 }
 
+pub fn scale_alpha_to_original_coverage(
+    src: &Image<'_>,
+    downsampled: &Image<'_>,
+    alpha_cutoff: Option<f32>,
+) -> Vec<u8> {
+    assert!(
+        matches!(src.format, Format::RGBA8),
+        "Cannot retain alpha coverage on image with no alpha channel"
+    );
+    let mut alpha_scaled_data = downsampled.pixels.to_vec();
+    unsafe {
+        ispc::downsample_ispc::scale_to_alpha_coverage(
+            src.width,
+            src.height,
+            src.pixels.as_ptr(),
+            downsampled.width,
+            downsampled.height,
+            alpha_scaled_data.as_mut_ptr(),
+            alpha_cutoff
+                .as_ref()
+                .map_or(std::ptr::null(), |alpha_cutoff| alpha_cutoff),
+        );
+    }
+    alpha_scaled_data
+}
+
 /// Runs the ISPC kernel on the source image, sampling it down to the `target_width` and `target_height`. Returns the downsampled pixel data as a `Vec<u8>`.
 ///
 /// Will panic if the target width or height are higher than that of the source image.
-pub fn downsample(
-    src: &Image<'_>,
-    target_width: u32,
-    target_height: u32,
-    target_desired_alpha_coverage: AlphaCoverageSetting,
-) -> Vec<u8> {
+pub fn downsample(src: &Image<'_>, target_width: u32, target_height: u32) -> Vec<u8> {
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
 
@@ -174,28 +195,6 @@ pub fn downsample(
             src.pixels.as_ptr(),
             output.as_mut_ptr(),
         )
-    }
-
-    if let AlphaCoverageSetting::RetainAlphaCoverage { alpha_cutoff } =
-        target_desired_alpha_coverage
-    {
-        assert!(
-            matches!(src.format, Format::RGBA8),
-            "Cannot retain alpha coverage on image with no alpha channel"
-        );
-        unsafe {
-            ispc::downsample_ispc::scale_to_alpha_coverage(
-                src.width,
-                src.height,
-                src.pixels.as_ptr(),
-                target_width,
-                target_height,
-                output.as_mut_ptr(),
-                alpha_cutoff
-                    .as_ref()
-                    .map_or(std::ptr::null(), |alpha_cutoff| alpha_cutoff),
-            );
-        }
     }
 
     output
