@@ -22,6 +22,7 @@ extern "C" {
         downsampled_width: u32,
         downsampled_height: u32,
         downsampled_image_data: *mut u8,
-    ) -> f32;
+        alpha_cutoff: *const f32,
+    );
 }
 }

@@ -191,9 +191,9 @@ pub fn downsample(
                 target_width,
                 target_height,
                 output.as_mut_ptr(),
-                //alpha_cutoff
-                //.as_ref()
-                //.map_or(std::ptr::null(), |alpha_cutoff| alpha_cutoff),
+                alpha_cutoff
+                    .as_ref()
+                    .map_or(std::ptr::null(), |alpha_cutoff| alpha_cutoff),
             );
         }
     }
