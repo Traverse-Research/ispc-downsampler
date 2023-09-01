@@ -13,8 +13,8 @@ uniform float calculate_scaled_alpha_coverage(uniform Image image, const uniform
     float coverage = 0.0f;
     const uniform int subsample_factor = 4;
 
-    for (uniform uint64 y = 0; y < image.size.y - 1; y++) {
-        for (uniform uint64 x = 0; x < image.size.x - 1; x++) {
+    for (uint64 x = 0; x < image.size.x - 1; x++) {
+        for (uint64 y = 0; y < image.size.y - 1; y++) {
             float top_left = min((get_alpha(image, x, y) * scale), 1.0);
             float top_right = min((get_alpha(image, x + 1, y) * scale), 1.0);
             float bottom_left = min((get_alpha(image, x, y + 1) * scale), 1.0);
@@ -44,7 +44,7 @@ uniform float calculate_scaled_alpha_coverage(uniform Image image, const uniform
         }
     }
 
-    return reduce_add(coverage) / (float)((image.size.x - 1) * (image.size.y- 1));
+    return reduce_add(coverage) / (float)((image.size.x - 1) * (image.size.y - 1));
 }
 
 uniform float calculate_alpha_coverage(uniform Image image, uniform float* uniform alpha_cutoff) {
@@ -97,8 +97,8 @@ uniform float find_alpha_scale_for_coverage(uniform Image image, uniform float d
 }
 
 void apply_alpha_scale(uniform Image image, uniform float scale) {
-    for (uniform uint64 y = 0; y < image.size.y; y++) {
-        for (uniform uint64 x = 0; x < image.size.x; x++) {
+    for (uint64 y = 0; y < image.size.y; y++) {
+        for (uint64 x = 0; x < image.size.x; x++) {
             uint64 pixel_index = x + y * image.size.x;
             uint64 alpha_value_index = pixel_index * 4 + 3;
 
