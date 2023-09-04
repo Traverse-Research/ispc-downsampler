@@ -35,7 +35,7 @@ fn compile_bindings() {
                 .allowlist_function("scale_to_alpha_coverage"),
         )
         .out_dir("src/ispc")
-        .compile("downsample_ispc")
+        .compile("downsample_ispc");
 }
 
 #[cfg(not(feature = "ispc"))]
