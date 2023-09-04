@@ -1,8 +1,11 @@
 #include "image.ispc"
 
+// The logic for this kernel only supports 4-channel textures
+const uint8 NUM_CHANNELS = 4;
+
 float get_alpha(uniform Image image, uint64 x, uint64 y) {
     uint64 pixel_index = x + y * image.size.x;
-    return (float)image.data[pixel_index * 4 + 3] / 255.0f;
+    return (float)image.data[pixel_index * NUM_CHANNELS + 3] / 255.0f;
 }
 
 uniform float calculate_scaled_alpha_coverage(uniform Image image, const uniform float* uniform alpha_cutoff, uniform float scale) {
@@ -100,7 +103,7 @@ void apply_alpha_scale(uniform Image image, uniform float scale) {
     for (uint64 y = 0; y < image.size.y; y++) {
         for (uint64 x = 0; x < image.size.x; x++) {
             uint64 pixel_index = x + y * image.size.x;
-            uint64 alpha_value_index = pixel_index * 4 + 3;
+            uint64 alpha_value_index = NUM_CHANNELS + 3;
 
             float original_alpha = get_alpha(image, x, y);
             image.data[alpha_value_index] = (uint8)min(255.0f, (float)original_alpha * scale * 255.0f);
