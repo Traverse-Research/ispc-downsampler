@@ -14,7 +14,7 @@ impl Format {
     }
 }
 
-/// Describes a source image which can be used for `downsample`
+/// Describes a source image which can be used for [`downsample()`]
 /// The pixel data is stored as a slice to avoid unnecessarily cloning it.
 pub struct Image<'a> {
     pixels: &'a [u8],
