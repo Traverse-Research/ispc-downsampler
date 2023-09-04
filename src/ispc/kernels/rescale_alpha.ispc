@@ -3,9 +3,13 @@
 // The logic for this kernel only supports 4-channel textures
 const uint8 NUM_CHANNELS = 4;
 
-float get_alpha(uniform Image image, uint64 x, uint64 y) {
+uint64 get_alpha_index(uniform Image image, uint64 x, uint64 y) {
     uint64 pixel_index = x + y * image.size.x;
-    return (float)image.data[pixel_index * NUM_CHANNELS + 3] / 255.0f;
+    return pixel_index * NUM_CHANNELS + 3;
+}
+
+float get_alpha(uniform Image image, uint64 x, uint64 y) {
+    return (float)image.data[get_alpha_index(image, x, y)] / 255.0f;
 }
 
 uniform float calculate_scaled_alpha_coverage(uniform Image image, const uniform float* uniform alpha_cutoff, uniform float scale) {
@@ -56,9 +60,11 @@ uniform float calculate_alpha_coverage(uniform Image image, uniform float* unifo
 
 const uniform float INFINITY = 1.0f / 0.0f;
 
-/// Computes the scaling factor needed for the texture's alpha such that the desired
-/// coverage is best approximated
-/// Ported version of implementation in https://github.com/castano/nvidia-texture-tools/.
+/**
+Computes the scaling factor needed for the texture's alpha such that the desired
+coverage is best approximated
+Ported version of implementation in https://github.com/castano/nvidia-texture-tools/.
+**/
 uniform float find_alpha_scale_for_coverage(uniform Image image, uniform float desired_coverage, const uniform float* uniform alpha_cutoff)  {
     // This range of potential scale values is an estimate. Especially the upper bound
     // may not be sufficient for some use-cases, depending on the downscale
@@ -70,11 +76,11 @@ uniform float find_alpha_scale_for_coverage(uniform Image image, uniform float d
     uniform float alpha_scale = 1.0;
 
     // The search is done heuristically, so a tested alpha scale value
-    // does not directly map to the resulting alpha coverage. To ensure,
-    // we do not overwrite the best result, store
-    // the best result so far and use that instead of the last found scale
+    // does not directly map to the resulting alpha coverage. To ensure
+    // we do not overwrite the best result, store the best result so far
+    // and use that instead of the last found scale
     uniform float best_abs_diff = INFINITY;
-    uniform float best_alpha_scale = alpha_scale;
+    uniform float best_alpha_scale;
 
     // 10-step binary search for the alpha multiplier that best matches
     // the desired alpha coverage
@@ -103,10 +109,10 @@ void apply_alpha_scale(uniform Image image, uniform float scale) {
     for (uint64 y = 0; y < image.size.y; y++) {
         for (uint64 x = 0; x < image.size.x; x++) {
             uint64 pixel_index = x + y * image.size.x;
-            uint64 alpha_value_index = NUM_CHANNELS + 3;
+            uint64 alpha_value_index = pixel_index * NUM_CHANNELS + 3;
 
             float original_alpha = get_alpha(image, x, y);
-            image.data[alpha_value_index] = (uint8)min(255.0f, (float)original_alpha * scale * 255.0f);
+            image.data[get_alpha_index(image, x, y)] = (uint8)min(255.0f, (float)original_alpha * scale * 255.0f);
         }
     }
 }
@@ -114,8 +120,8 @@ void apply_alpha_scale(uniform Image image, uniform float scale) {
 export void scale_to_alpha_coverage(uniform uint32 source_width, uniform uint32 source_height, uniform const uint8 source_data[],
     uniform uint32 downsampled_width, uniform uint32 downsampled_height, uniform uint8 downsampled_image_data[],
     const uniform float* uniform alpha_cutoff) {
-    uniform Image source = { source_data, {source_width, source_height}};
-    uniform Image downsampled = { downsampled_image_data, {downsampled_width, downsampled_height}};
+    uniform Image source = { source_data, {source_width, source_height} };
+    uniform Image downsampled = { downsampled_image_data, {downsampled_width, downsampled_height} };
 
     uniform float coverage = calculate_alpha_coverage(source, alpha_cutoff);
     uniform float scale = find_alpha_scale_for_coverage(downsampled, coverage, alpha_cutoff);
