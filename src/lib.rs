@@ -37,10 +37,10 @@ impl<'a> Image<'a> {
 
 /// Scales the alpha to the downscaled texture to preserve the overall alpha coverage.
 ///
-/// If alpha cutoff is specified, any alpha value above it is considered visible
-/// of which the percentage of visible texels will be. Otherwise, visibility is considered
-/// a linear sum of the alpha values instead and the source and target alpha coverage are calculated
-/// the same way.
+/// If alpha cutoff is specified, any alpha value above it is considered visible of
+/// which the percentage of visible texels will be. Otherwise, visibility is considered
+/// a linear sum of the alpha values instead and the source and target alpha coverage
+/// are calculated the same way.
 pub fn scale_alpha_to_original_coverage(
     src: &Image<'_>,
     downsampled: &Image<'_>,

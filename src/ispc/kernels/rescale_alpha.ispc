@@ -108,9 +108,6 @@ uniform float find_alpha_scale_for_coverage(uniform Image image, uniform float d
 void apply_alpha_scale(uniform Image image, uniform float scale) {
     for (uint64 y = 0; y < image.size.y; y++) {
         for (uint64 x = 0; x < image.size.x; x++) {
-            uint64 pixel_index = x + y * image.size.x;
-            uint64 alpha_value_index = pixel_index * NUM_CHANNELS + 3;
-
             float original_alpha = get_alpha(image, x, y);
             image.data[get_alpha_index(image, x, y)] = (uint8)min(255.0f, (float)original_alpha * scale * 255.0f);
         }
