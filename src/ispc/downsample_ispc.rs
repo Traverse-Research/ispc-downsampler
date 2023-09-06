@@ -14,4 +14,15 @@ extern "C" {
         out_data: *mut u8,
     );
 }
+extern "C" {
+    pub fn scale_to_alpha_coverage(
+        source_width: u32,
+        source_height: u32,
+        source_data: *const u8,
+        downsampled_width: u32,
+        downsampled_height: u32,
+        downsampled_image_data: *mut u8,
+        alpha_cutoff: *const f32,
+    );
+}
 }

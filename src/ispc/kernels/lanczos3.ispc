@@ -1,3 +1,5 @@
+#include "image.ispc"
+
 #define M_PI 3.14159265358979
 
 static inline float clean(float t)
@@ -27,11 +29,6 @@ static inline float lanczos3_filter(float t)
     else
         return 0.0f;
 }
-
-struct Image {
-    uniform const uint8* data;
-    uniform int<2> size;
-};
 
 static inline float frac(float f) {
     float absf = abs(f);
