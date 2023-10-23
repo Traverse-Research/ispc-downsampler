@@ -46,12 +46,15 @@ static inline uint8<4> resample_internal(uniform Image src_image, float<2> uv, u
     // Truncate floating point coordinate to integer:
     const int<2> src_coord = uv * src_image.size;
 
-    for (uniform int x = -3; x <= 3; x++) {
-        for (uniform int y = -3; y <= 3; y++) {
-            const float lanczos3_offset = 0.5;
+    // Sample the lanczos3 filter from -2.5 to 2.5.
+    // Pixel 0, 0 in the source will be at the bottom-right of the center of the target pixel,
+    // hence reading source pixels in the range [-3, 2] will correctly read pixels to the left, top,
+    // right and bottom of the target pixel.
+    for (uniform int x = -3; x < 3; x++) {
+        for (uniform int y = -3; y < 3; y++) {
+            float wx = lanczos3_filter((uniform float)x + 0.5);
+            float wy = lanczos3_filter((uniform float)y + 0.5);
 
-            float wx = lanczos3_filter((uniform float)x + lanczos3_offset);
-            float wy = lanczos3_filter((uniform float)y + lanczos3_offset);
             float w = wx * wy;
             int<2> texel_offset = {x, y};
             int<2> src_kernel_coord = src_coord + texel_offset;
