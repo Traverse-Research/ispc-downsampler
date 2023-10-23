@@ -74,18 +74,15 @@ pub fn downsample(src: &Image<'_>, target_width: u32, target_height: u32) -> Vec
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
     assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
 
-    let mut output = Vec::new();
-    output.resize(
-        (target_width * target_height * src.format.num_channels() as u32) as usize,
-        0,
-    );
+    let num_channels = src.format.num_channels();
+    let mut output = vec![0; (target_width * target_height * num_channels as u32) as usize];
 
     unsafe {
         ispc::downsample_ispc::resample(
             src.width,
             src.height,
             src.width,
-            src.format.num_channels(),
+            num_channels,
             target_width,
             target_height,
             src.pixels.as_ptr(),
