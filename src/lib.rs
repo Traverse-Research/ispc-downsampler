@@ -35,6 +35,25 @@ impl<'a> Image<'a> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Parameters {
+    /// Whether to linearize the input before downsampling.  Assumes the input has a gamma of
+    /// `1/2.2` that needs to be linearized by applying exponent `2.2`.
+    pub degamma: bool,
+    /// Whether to apply gamma (make the output nonlinear) to make it compatible with typical CRTs
+    /// that have a gamma of `2.2`, by giving linear values a gamma of `1/2.2`.
+    pub gamma: bool,
+}
+
+impl Parameters {
+    fn to_ispc(&self) -> ispc::downsample_ispc::Parameters {
+        ispc::downsample_ispc::Parameters {
+            degamma: self.degamma,
+            gamma: self.gamma,
+        }
+    }
+}
+
 /// Scales the alpha to the downscaled texture to preserve the overall alpha coverage.
 ///
 /// If alpha cutoff is specified, any alpha value above it is considered visible of
@@ -70,25 +89,38 @@ pub fn scale_alpha_to_original_coverage(
 /// Runs the ISPC kernel on the source image, sampling it down to the `target_width` and `target_height`. Returns the downsampled pixel data as a `Vec<u8>`.
 ///
 /// Will panic if the target width or height are higher than that of the source image.
-pub fn downsample(src: &Image<'_>, target_width: u32, target_height: u32) -> Vec<u8> {
+pub fn downsample(
+    params: &Parameters,
+    src: &Image<'_>,
+    target_width: u32,
+    target_height: u32,
+) -> Vec<u8> {
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
-    assert!(src.height >= target_height, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
+    assert!(src.height >= target_height, "The height of the source image is less than the target's height. You are trying to upsample rather than downsample");
 
     let num_channels = src.format.num_channels();
+
+    let src = ispc::downsample_ispc::Image {
+        data: src.pixels.as_ptr() as *mut _,
+        __bindgen_padding_0: 0,
+        // TODO: Use the builtin type when ISPC 1.22 is released
+        // https://github.com/ispc/ispc/issues/2650
+        size: ispc::downsample_ispc::uint32_t2 {
+            v: [src.width, src.height],
+        },
+    };
+
     let mut output = vec![0; (target_width * target_height * num_channels as u32) as usize];
 
-    unsafe {
-        ispc::downsample_ispc::resample(
-            src.width,
-            src.height,
-            src.width,
-            num_channels,
-            target_width,
-            target_height,
-            src.pixels.as_ptr(),
-            output.as_mut_ptr(),
-        )
-    }
+    let mut dst = ispc::downsample_ispc::Image {
+        data: output.as_mut_ptr(),
+        __bindgen_padding_0: 0,
+        size: ispc::downsample_ispc::uint32_t2 {
+            v: [target_width, target_height],
+        },
+    };
+
+    unsafe { ispc::downsample_ispc::resample(&params.to_ispc(), &src, &mut dst, num_channels) }
 
     output
 }
