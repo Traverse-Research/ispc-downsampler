@@ -35,8 +35,9 @@ static inline float byte_to_float(uint b) {
     return (float)b;
 }
 
-static inline uint8<4> resample_internal(const uniform Image src_image, const float<2> uv, const uniform uint8 num_channels) {
-    float<4> col = 0.0;
+template<int NC>
+static inline uint8<NC> resample_internal(uniform Image src_image, const float<2> uv) {
+    float<NC> col = 0.0;
     uniform float weight = 0.0;
     // Truncate floating point coordinate to integer:
     const int<2> src_coord = uv * src_image.size;
@@ -58,7 +59,7 @@ static inline uint8<4> resample_internal(const uniform Image src_image, const fl
             src_kernel_coord.x = clamp(src_kernel_coord.x, 0, src_image.size.x - 1);
             src_kernel_coord.y = clamp(src_kernel_coord.y, 0, src_image.size.y - 1);
 
-            const int addr = (src_kernel_coord.x + src_kernel_coord.y * src_image.size.x) * num_channels;
+            const int addr = (src_kernel_coord.x + src_kernel_coord.y * src_image.size.x) * NC;
 
             float<4> texel;
 
@@ -67,7 +68,7 @@ static inline uint8<4> resample_internal(const uniform Image src_image, const fl
             texel.x = byte_to_float(src_image.data[addr + 0]) * inv_255;
             texel.y = byte_to_float(src_image.data[addr + 1]) * inv_255;
             texel.z = byte_to_float(src_image.data[addr + 2]) * inv_255;
-            if (num_channels == 4)
+            if (NC == 4)
                 texel.w = byte_to_float(src_image.data[addr + 3]) * inv_255;
 
             col += w * texel;
@@ -90,14 +91,31 @@ export void resample(uniform uint32 width, uniform uint32 height, uniform uint32
         // Convert to uniform space:
         uv *= inv_target_size;
 
-        const uint8<4> s = resample_internal(src, uv, num_channels);
-
+        // TODO: Could this be more efficient when moved into an integer-const function too?
         unsigned int addr = (x + y * target_width) * num_channels;
 
+<<<<<<< HEAD
         out_data[addr + 0] = s.x;
         out_data[addr + 1] = s.y;
         out_data[addr + 2] = s.z;
         if (num_channels == 4)
             out_data[addr + 3] = s.w;
+=======
+        if (num_channels == 3) {
+            uint8<3> s = resample_internal<3>(src, uv);
+            out_data[addr + 0] = s.x;
+            out_data[addr + 1] = s.y;
+            out_data[addr + 2] = s.z;
+        } else if (num_channels == 4) {
+            uint8<4> s = resample_internal<4>(src, uv);
+            out_data[addr + 0] = s.x;
+            out_data[addr + 1] = s.y;
+            out_data[addr + 2] = s.z;
+            out_data[addr + 3] = s.w;
+        }
+
+        // for (uniform unsigned int i = 0; i < 3; i++)
+        //     out_data[(x + y * target_width) * num_channels + i] = s[i];
+>>>>>>> c71111a (Integer template constants are not yet supported)
     }
 }
