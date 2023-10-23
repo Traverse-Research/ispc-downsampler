@@ -46,7 +46,7 @@ static inline float byte_to_float(uint8 b/*, uniform bool degamma*/) {
     return (float)b * inv_255;
 }
 
-static inline uint8 float_to_byte(float d, bool gamma) {
+static inline uint8 float_to_byte(float d, uniform bool gamma) {
     if (gamma) {
         d = pow(d, 1.0f / GAMMA);
     }
@@ -54,7 +54,41 @@ static inline uint8 float_to_byte(float d, bool gamma) {
     return clamp(b, 0, 255);
 }
 
-static inline uint8<4> resample_internal(const uniform Image src_image, const float<2> uv, const uniform uint8 num_channels) {
+template<typename IT>
+static float<4> sample_image(const uniform IT image, const uint<2> coord, const uniform uint8 num_channels) {
+    return 0.0f;
+}
+
+template<>
+static float<4> sample_image<Image>(const uniform Image image, const uint<2> coord, const uniform uint8 num_channels) {
+    float<4> col = 0.0;
+    int addr = (coord.x + coord.y * image.size.x) * num_channels;
+
+    col[0] = pow(byte_to_float(image.data[addr + 0]), GAMMA);
+    col[1] = pow(byte_to_float(image.data[addr + 1]), GAMMA);
+    col[2] = pow(byte_to_float(image.data[addr + 2]), GAMMA);
+    if (num_channels == 4)
+        col[3] = pow(byte_to_float(image.data[addr + 3]), GAMMA);
+
+    // for (uniform int i = 0; i < num_channels; i++)
+    //     col[i] = byte_to_float(image.data[addr + i]);
+
+    return col;
+}
+
+template<>
+static float<4> sample_image<FloatImage>(const uniform FloatImage image, const uint<2> coord, const uniform uint8 num_channels) {
+    float<4> col = 0.0;
+    int addr = (coord.x + coord.y * image.size.x) * num_channels;
+
+    for (uniform int i = 0; i < num_channels; i++)
+        col[i] = image.data[addr + i];
+
+    return col;
+}
+
+template<typename IT>
+static inline uint8<4> resample_internal(const uniform IT src_image, const float<2> uv, const uniform uint8 num_channels) {
     float<4> col = 0.0;
     uniform float weight = 0.0;
     // Truncate floating point coordinate to integer:
@@ -76,35 +110,37 @@ static inline uint8<4> resample_internal(const uniform Image src_image, const fl
             // https://github.com/Traverse-Research/ispc-downsampler/issues/25#issuecomment-1584915050
             src_kernel_coord.x = clamp(src_kernel_coord.x, 0, src_image.size.x - 1);
             src_kernel_coord.y = clamp(src_kernel_coord.y, 0, src_image.size.y - 1);
+            const uint<2> src_coord = src_kernel_coord;
 
-            const int addr = (src_kernel_coord.x + src_kernel_coord.y * src_image.size.x) * num_channels;
+            // const int addr = (src_kernel_coord.x + src_kernel_coord.y * src_image.size.x) * num_channels;
 
-            float<4> texel;
-            if (num_channels == 3) {
-                texel.x = byte_to_float(src_image.data[addr + 0]);
-                texel.y = byte_to_float(src_image.data[addr + 1]);
-                texel.z = byte_to_float(src_image.data[addr + 2]);
-            } else if (num_channels == 4) {
-                texel.x = byte_to_float(src_image.data[addr + 0]);
-                texel.y = byte_to_float(src_image.data[addr + 1]);
-                texel.z = byte_to_float(src_image.data[addr + 2]);
-                texel.w = byte_to_float(src_image.data[addr + 3]);
-            }
+            // float<4> texel;
+            // if (num_channels == 3) {
+            //     texel.x = byte_to_float(src_image.data[addr + 0]);
+            //     texel.y = byte_to_float(src_image.data[addr + 1]);
+            //     texel.z = byte_to_float(src_image.data[addr + 2]);
+            // } else if (num_channels == 4) {
+            //     texel.x = byte_to_float(src_image.data[addr + 0]);
+            //     texel.y = byte_to_float(src_image.data[addr + 1]);
+            //     texel.z = byte_to_float(src_image.data[addr + 2]);
+            //     texel.w = byte_to_float(src_image.data[addr + 3]);
+            // }
             // for (uniform int i = 0; i < num_channels; i++)
             //     col[i] += w * byte_to_float(src_image.data[addr + i]);
 
-            col += w * texel;
+            // col += w * texel;
             weight += w;
+            col += w * sample_image<IT>(src_image, src_coord, num_channels);
         }
     }
     col /= weight;
     return col;
-
 }
 
 export void resample(
     uniform const Parameters *uniform params,
     uniform const Image *uniform src,
+    // uniform FloatImage *uniform degamma,
     uniform Image *uniform dst,
     // Passed separately because it should be the same between input and output:
     uniform uint8 num_channels
@@ -118,7 +154,7 @@ export void resample(
             for (uniform int i = 0; i < num_channels; i++) {
                 uint c = p + i;
                 // TODO: This texture should be writeonly!
-                src->data[c] = float_to_byte(pow(byte_to_float(src->data[c]), GAMMA), false);
+                // degamma->data[c] = pow(byte_to_float(src->data[c]), GAMMA);
             }
         }
     }
@@ -130,7 +166,11 @@ export void resample(
         // Convert to uniform space:
         uv *= inv_target_size;
 
-        const float<4> col = resample_internal(*src, uv, num_channels);
+        float<4> col;
+        // if (params->degamma)
+        //     col = resample_internal(*degamma, uv, num_channels);
+        // else
+            col = resample_internal(*src, uv, num_channels);
 
         for (uniform int i = 0; i < num_channels; i++)
             dst->data[(x + y * dst->size.x) * num_channels + i] = float_to_byte(col[i], params->gamma);

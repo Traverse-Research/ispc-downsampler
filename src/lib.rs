@@ -100,6 +100,16 @@ pub fn downsample(
 
     let num_channels = src.format.num_channels();
 
+    // TODO: Alloc can be optional
+    // let mut degamma = vec![0f32; (src.width * src.height * num_channels as u32) as usize];
+    // let mut degamma = ispc::downsample_ispc::FloatImage {
+    //     data: degamma.as_mut_ptr(),
+    //     __bindgen_padding_0: 0,
+    //     size: ispc::downsample_ispc::uint32_t2 {
+    //         v: [src.width, src.height],
+    //     },
+    // };
+
     let src = ispc::downsample_ispc::Image {
         data: src.pixels.as_ptr() as *mut _,
         __bindgen_padding_0: 0,
@@ -120,7 +130,15 @@ pub fn downsample(
         },
     };
 
-    unsafe { ispc::downsample_ispc::resample(&params.to_ispc(), &src, &mut dst, num_channels) }
+    unsafe {
+        ispc::downsample_ispc::resample(
+            &params.to_ispc(),
+            &src,
+            // &mut degamma,
+            &mut dst,
+            num_channels,
+        )
+    }
 
     output
 }
