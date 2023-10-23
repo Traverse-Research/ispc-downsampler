@@ -1,6 +1,16 @@
 #include "image.ispc"
 
-const uniform float M_PI = 3.14159265358979;
+const uniform float M_PI = 3.14159265358979f;
+const uniform float GAMMA = 2.2f;
+
+struct Parameters {
+    // Whether to linearize the input before downsampling.  Assumes the input has a gamma of 1/2.2
+    // that needs to be linearized by applying exponent 2.2.
+    bool degamma;
+    // Whether to apply gamma (make the output nonlinear) to make it compatible with typical CRTs
+    // that have a gamma of 2.2, by giving linear values a gamma of 1/2.2.
+    bool gamma;
+};
 
 static inline uniform float clean(uniform float t)
 {
@@ -30,12 +40,28 @@ static inline uniform float lanczos3_filter(uniform float t)
         return 0.0f;
 }
 
-static inline float byte_to_float(uint b) {
-    //return floatbits(0x3f800000 | (b << (23 - 8))) - 1.0;
-    return (float)b;
+static inline float byte_to_float(uint8 b, uniform bool degamma) {
+    const uniform float inv_255 = rcp(255.0);
+
+    // floatbits(0x3f800000 | (b << (23 - 8))) - 1.0;
+    float d = (float)b * inv_255;
+
+    if (degamma) {
+        d = pow(d, GAMMA);
+    }
+
+    return d;
 }
 
-static inline uint8<4> resample_internal(const uniform Image src_image, const float<2> uv, const uniform uint8 num_channels) {
+static inline uint8 float_to_byte(float d, uniform bool gamma) {
+    if (gamma) {
+        d = pow(d, 1.0f / GAMMA);
+    }
+    int b = d * 255;
+    return clamp(b, 0, 255);
+}
+
+static inline uint8<4> resample_internal(const uniform Parameters params, const uniform Image src_image, const float<2> uv, const uniform uint8 num_channels) {
     float<4> col = 0.0;
     uniform float weight = 0.0;
     // Truncate floating point coordinate to integer:
@@ -61,18 +87,15 @@ static inline uint8<4> resample_internal(const uniform Image src_image, const fl
             const int addr = (src_kernel_coord.x + src_kernel_coord.y * src_image.size.x) * num_channels;
 
             float<4> texel;
-
-            const uniform float inv_255 = rcp(255.0);
-
             if (num_channels == 3) {
-                texel.x = byte_to_float(src_image.data[addr + 0]) * inv_255;
-                texel.y = byte_to_float(src_image.data[addr + 1]) * inv_255;
-                texel.z = byte_to_float(src_image.data[addr + 2]) * inv_255;
+                texel.x = byte_to_float(src_image.data[addr + 0], params.degamma);
+                texel.y = byte_to_float(src_image.data[addr + 1], params.degamma);
+                texel.z = byte_to_float(src_image.data[addr + 2], params.degamma);
             } else if (num_channels == 4) {
-                texel.x = byte_to_float(src_image.data[addr + 0]) * inv_255;
-                texel.y = byte_to_float(src_image.data[addr + 1]) * inv_255;
-                texel.z = byte_to_float(src_image.data[addr + 2]) * inv_255;
-                texel.w = byte_to_float(src_image.data[addr + 3]) * inv_255;
+                texel.x = byte_to_float(src_image.data[addr + 0], params.degamma);
+                texel.y = byte_to_float(src_image.data[addr + 1], params.degamma);
+                texel.z = byte_to_float(src_image.data[addr + 2], params.degamma);
+                texel.w = byte_to_float(src_image.data[addr + 3], params.degamma);
             }
 
             col += w * texel;
@@ -80,24 +103,33 @@ static inline uint8<4> resample_internal(const uniform Image src_image, const fl
         }
     }
     col /= weight;
-    return col * 255;
+
+    uint8<4> res;
+    for (uniform int i = 0; i < num_channels; i++)
+        res[i] = float_to_byte(col[i], params.gamma);
+
+    return res;
 }
 
-export void resample(uniform uint32 width, uniform uint32 height, uniform uint32 stride, uniform uint8 num_channels, uniform uint32 target_width, uniform uint32 target_height, uniform const uint8 src_data[], uniform uint8 out_data[]) {
-    const uniform Image src = {src_data, {width, height}};
-    const uniform float<2> target_size = {(float)target_width, (float)target_height};
-    const uniform float<2> inv_target_size = 1.0f / target_size;
+export void resample(
+    uniform const Parameters *uniform params,
+    uniform const Image *uniform src,
+    uniform Image *uniform dst,
+    // Passed separately because it should be the same between input and output:
+    uniform uint8 num_channels
+) {
+    const uniform float<2> inv_target_size = 1.0f / dst->size;
 
-    foreach_tiled (y = 0 ... target_height, x = 0 ... target_width) {
+    foreach_tiled (y = 0 ... dst->size.y, x = 0 ... dst->size.x) {
         float<2> uv = {x, y};
         // Use the center of each pixel, not the top-left:
         uv += 0.5f;
         // Convert to uniform space:
         uv *= inv_target_size;
 
-        const uint8<4> s = resample_internal(src, uv, num_channels);
+        const uint8<4> s = resample_internal(*params, *src, uv, num_channels);
 
         for (uniform int i = 0; i < num_channels; i++)
-            out_data[(x + y * target_width) * num_channels + i] = s[i];
+            dst->data[(x + y * dst->size.x) * num_channels + i] = s[i];
     }
 }

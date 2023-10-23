@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use ispc_downsampler::{downsample, Format, Image};
+use ispc_downsampler::{downsample, Format, Image, Parameters};
 use resize::{px::RGB, Type::Lanczos3};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
@@ -17,8 +17,15 @@ pub fn ispc_downsampler(c: &mut Criterion) {
         let target_width = (img.width / 4) as u32;
         let target_height = (img.height / 4) as u32;
 
+        let params = Parameters {
+            // Input stb Image is gamma-corrected (i.e. expects to be passed through a CRT with exponent 2.2)
+            degamma: true,
+            // Output image is PNG which must be stored with a gamma of 1/2.2
+            gamma: true,
+        };
+
         c.bench_function("Downsample `square_test.png` using ispc_downsampler", |b| {
-            b.iter(|| downsample(&src_img, target_width, target_height))
+            b.iter(|| downsample(&params, &src_img, target_width, target_height))
         });
     }
 }
