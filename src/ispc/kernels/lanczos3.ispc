@@ -64,16 +64,11 @@ static inline uint8<4> resample_internal(const uniform Image src_image, const fl
 
             const uniform float inv_255 = rcp(255.0);
 
-            if (num_channels == 3) {
-                texel.x = byte_to_float(src_image.data[addr + 0]) * inv_255;
-                texel.y = byte_to_float(src_image.data[addr + 1]) * inv_255;
-                texel.z = byte_to_float(src_image.data[addr + 2]) * inv_255;
-            } else if (num_channels == 4) {
-                texel.x = byte_to_float(src_image.data[addr + 0]) * inv_255;
-                texel.y = byte_to_float(src_image.data[addr + 1]) * inv_255;
-                texel.z = byte_to_float(src_image.data[addr + 2]) * inv_255;
+            texel.x = byte_to_float(src_image.data[addr + 0]) * inv_255;
+            texel.y = byte_to_float(src_image.data[addr + 1]) * inv_255;
+            texel.z = byte_to_float(src_image.data[addr + 2]) * inv_255;
+            if (num_channels == 4)
                 texel.w = byte_to_float(src_image.data[addr + 3]) * inv_255;
-            }
 
             col += w * texel;
             weight += w;
@@ -97,7 +92,12 @@ export void resample(uniform uint32 width, uniform uint32 height, uniform uint32
 
         const uint8<4> s = resample_internal(src, uv, num_channels);
 
-        for (uniform int i = 0; i < num_channels; i++)
-            out_data[(x + y * target_width) * num_channels + i] = s[i];
+        unsigned int addr = (x + y * target_width) * num_channels;
+
+        out_data[addr + 0] = s.x;
+        out_data[addr + 1] = s.y;
+        out_data[addr + 2] = s.z;
+        if (num_channels == 4)
+            out_data[addr + 3] = s.w;
     }
 }
