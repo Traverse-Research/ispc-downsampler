@@ -55,40 +55,45 @@ static inline uint8 float_to_byte(float d, uniform bool gamma) {
 }
 
 template<typename IT>
-static float<4> sample_image(const uniform IT image, const uint<2> coord, const uniform uint8 num_channels) {
-    return 0.0f;
+static float<4> sample_image(const uniform IT &image, const uint<2> coord, const uniform uint8 num_channels) {
+    // Theoretically a template function without default shouldn't have a body,
+    // but it compiles anyway without a return for unspecialized types!
 }
 
 template<>
-static float<4> sample_image<Image>(const uniform Image image, const uint<2> coord, const uniform uint8 num_channels) {
-    float<4> col = 0.0;
-    int addr = (coord.x + coord.y * image.size.x) * num_channels;
+static float<4> sample_image<Image>(const uniform Image &image, const uint<2> coord, const uniform uint8 num_channels) {
+    // float<4> col = {1, 0, 1, 0};
+    float<4> col = 0;
+    unsigned int addr = (coord.x + coord.y * image.size.x) * num_channels;
 
-    col[0] = pow(byte_to_float(image.data[addr + 0]), GAMMA);
-    col[1] = pow(byte_to_float(image.data[addr + 1]), GAMMA);
-    col[2] = pow(byte_to_float(image.data[addr + 2]), GAMMA);
-    if (num_channels == 4)
-        col[3] = pow(byte_to_float(image.data[addr + 3]), GAMMA);
+    // if (addr + 4 >= image.size.x * image.size.y * num_channels)
+    //     return col;
 
-    // for (uniform int i = 0; i < num_channels; i++)
-    //     col[i] = byte_to_float(image.data[addr + i]);
-
-    return col;
-}
-
-template<>
-static float<4> sample_image<FloatImage>(const uniform FloatImage image, const uint<2> coord, const uniform uint8 num_channels) {
-    float<4> col = 0.0;
-    int addr = (coord.x + coord.y * image.size.x) * num_channels;
+    // col.x = pow(byte_to_float(image.data[addr + 0]), GAMMA);
+    // col.y = pow(byte_to_float(image.data[addr + 1]), GAMMA);
+    // col.z = pow(byte_to_float(image.data[addr + 2]), GAMMA);
+    // if (num_channels >= 4)
+    //     col.w = pow(byte_to_float(image.data[addr + 3]), GAMMA);
 
     for (uniform int i = 0; i < num_channels; i++)
-        col[i] = image.data[addr + i];
+        col[i] = pow(byte_to_float(image.data[addr + i]), GAMMA);
 
     return col;
 }
 
+// template<>
+// static float<4> sample_image<FloatImage>(const uniform FloatImage &image, const uint<2> coord, const uniform uint8 num_channels) {
+//     float<4> col = 0.0;
+//     int addr = (coord.x + coord.y * image.size.x) * num_channels;
+
+//     for (uniform int i = 0; i < num_channels; i++)
+//         col[i] = image.data[addr + i];
+
+//     return col;
+// }
+
 template<typename IT>
-static inline uint8<4> resample_internal(const uniform IT src_image, const float<2> uv, const uniform uint8 num_channels) {
+static inline uint8<4> resample_internal(const uniform IT &src_image, const float<2> uv, const uniform uint8 num_channels) {
     float<4> col = 0.0;
     uniform float weight = 0.0;
     // Truncate floating point coordinate to integer:
@@ -108,8 +113,8 @@ static inline uint8<4> resample_internal(const uniform IT src_image, const float
             int<2> src_kernel_coord = src_coord + texel_offset;
             // TODO: Let the user specify a boundary mode!
             // https://github.com/Traverse-Research/ispc-downsampler/issues/25#issuecomment-1584915050
-            src_kernel_coord.x = clamp(src_kernel_coord.x, 0, src_image.size.x - 1);
-            src_kernel_coord.y = clamp(src_kernel_coord.y, 0, src_image.size.y - 1);
+            src_kernel_coord.x = clamp(src_kernel_coord.x, 0, (int)src_image.size.x - 1);
+            src_kernel_coord.y = clamp(src_kernel_coord.y, 0, (int)src_image.size.y - 1);
             const uint<2> src_coord = src_kernel_coord;
 
             // const int addr = (src_kernel_coord.x + src_kernel_coord.y * src_image.size.x) * num_channels;
