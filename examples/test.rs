@@ -1,5 +1,5 @@
 use image::{RgbImage, RgbaImage};
-use ispc_downsampler::{downsample, Format, Image};
+use ispc_downsampler::{downsample, Format, Image, Parameters};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
 use std::time::Instant;
@@ -26,7 +26,13 @@ fn main() {
 
             let now = Instant::now();
             println!("Downsampling started!");
-            let downsampled_pixels = downsample(&src_img, target_width, target_height);
+            let params = Parameters {
+                // Input stb Image is gamma-corrected (i.e. expects to be passed through a CRT with exponent 2.2)
+                degamma: false,
+                // Output image is PNG which must be stored with a gamma of 1/2.2
+                gamma: true,
+            };
+            let downsampled_pixels = downsample(&params, &src_img, target_width, target_height);
             println!("Finished downsampling in {:.2?}!", now.elapsed());
 
             std::fs::create_dir_all("example_outputs").unwrap();
