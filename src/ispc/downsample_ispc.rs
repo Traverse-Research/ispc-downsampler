@@ -117,10 +117,54 @@ fn bindgen_test_layout_Image() {
         )
     );
 }
+#[repr(C)]
+#[repr(align(16))]
+#[derive(Debug, Copy, Clone)]
+pub struct FloatImage {
+    pub data: *mut f32,
+    pub __bindgen_padding_0: u64,
+    pub size: uint32_t2,
+}
+#[test]
+fn bindgen_test_layout_FloatImage() {
+    const UNINIT: ::std::mem::MaybeUninit<FloatImage> = ::std::mem::MaybeUninit::uninit();
+    let ptr = UNINIT.as_ptr();
+    assert_eq!(
+        ::std::mem::size_of::<FloatImage>(),
+        32usize,
+        concat!("Size of: ", stringify!(FloatImage))
+    );
+    assert_eq!(
+        ::std::mem::align_of::<FloatImage>(),
+        16usize,
+        concat!("Alignment of ", stringify!(FloatImage))
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).data) as usize - ptr as usize },
+        0usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(FloatImage),
+            "::",
+            stringify!(data)
+        )
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).size) as usize - ptr as usize },
+        16usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(FloatImage),
+            "::",
+            stringify!(size)
+        )
+    );
+}
 extern "C" {
     pub fn resample(
         params: *const Parameters,
         src: *const Image,
+        degamma: *mut FloatImage,
         dst: *mut Image,
         num_channels: u8,
     );

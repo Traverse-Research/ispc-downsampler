@@ -47,7 +47,7 @@ static inline float byte_to_float(uint8 b/*, uniform bool degamma*/) {
     return (float)b * inv_255;
 }
 
-static inline uint8 float_to_byte(float d, bool gamma) {
+static inline uint8 float_to_byte(float d, uniform bool gamma) {
     if (gamma) {
         d = pow(d, DEGAMMA);
     }
@@ -55,7 +55,45 @@ static inline uint8 float_to_byte(float d, bool gamma) {
     return clamp(b, 0, 255);
 }
 
-static inline float<4> resample_internal(const uniform Image src_image, const float<2> uv, const uniform uint8 num_channels) {
+template<typename IT>
+static float<4> sample_image(const uniform IT &image, const int<2> coord, const uniform uint8 num_channels) {
+    return 0.0f;
+}
+
+template<>
+static float<4> sample_image<Image>(const uniform Image &image, const int<2> coord, const uniform uint8 num_channels) {
+    float<4> col = 0.0;
+    int x = clamp(coord.x, 0, image.size.x - 1);
+    int y = clamp(coord.y, 0, image.size.y - 1);
+    int addr = (x + y * image.size.x) * num_channels;
+
+    col[0] = byte_to_float(image.data[addr + 0]);
+    col[1] = byte_to_float(image.data[addr + 1]);
+    col[2] = byte_to_float(image.data[addr + 2]);
+    if (num_channels == 4)
+        col[3] = byte_to_float(image.data[addr + 3]);
+
+    return col;
+}
+
+template<>
+static float<4> sample_image<FloatImage>(const uniform FloatImage &image, const int<2> coord, const uniform uint8 num_channels) {
+    float<4> col = 0.0;
+    int x = clamp(coord.x, 0, image.size.x - 1);
+    int y = clamp(coord.y, 0, image.size.y - 1);
+    int addr = (x + y * image.size.x) * num_channels;
+
+    col[0] = image.data[addr + 0];
+    col[1] = image.data[addr + 1];
+    col[2] = image.data[addr + 2];
+    if (num_channels == 4)
+        col[3] = image.data[addr + 3];
+
+    return col;
+}
+
+template<typename IT>
+static inline float<4> resample_internal(const uniform IT src_image, const float<2> uv, const uniform uint8 num_channels) {
     float<4> col = 0.0;
     uniform float weight = 0.0;
     // Truncate floating point coordinate to integer:
@@ -72,61 +110,57 @@ static inline float<4> resample_internal(const uniform Image src_image, const fl
             const uniform float w = wx * wy;
             const uniform int<2> texel_offset = {x, y};
 
-            int<2> src_kernel_coord = src_coord + texel_offset;
+            int<2> c = src_coord + texel_offset;
             // TODO: Let the user specify a boundary mode!
             // https://github.com/Traverse-Research/ispc-downsampler/issues/25#issuecomment-1584915050
-            src_kernel_coord.x = clamp(src_kernel_coord.x, 0, src_image.size.x - 1);
-            src_kernel_coord.y = clamp(src_kernel_coord.y, 0, src_image.size.y - 1);
+            // TODO: For some obscure reason this must happen in sample_image() or the whole thing segfaults because
+            // values become <0 !?!?
+            // c.x = clamp(c.x, 0, src_image.size.x - 1);
+            // c.y = clamp(c.y, 0, src_image.size.y - 1);
 
-            const int addr = (src_kernel_coord.x + src_kernel_coord.y * src_image.size.x) * num_channels;
-
-            float<4> texel;
-            texel.x = byte_to_float(src_image.data[addr + 0]);
-            texel.y = byte_to_float(src_image.data[addr + 1]);
-            texel.z = byte_to_float(src_image.data[addr + 2]);
-            if (num_channels >= 4)
-                texel.w = byte_to_float(src_image.data[addr + 3]);
-
-            col += w * texel;
             weight += w;
+            col += w * sample_image<IT>(src_image, c, num_channels);
         }
     }
     col /= weight;
     return col;
-
 }
 
 export void resample(
-    uniform const Parameters *uniform params,
-    uniform const Image *uniform src,
-    uniform Image *uniform dst,
+    uniform const Parameters &params,
+    uniform const Image &src,
+    uniform FloatImage &degamma,
+    uniform Image &dst,
     // Passed separately because it should be the same between input and output:
     uniform uint8 num_channels
 ) {
-    const uniform float<2> inv_target_size = 1.0f / dst->size;
+    const uniform float<2> inv_target_size = 1.0f / dst.size;
 
-    if (params->degamma) {
-        foreach_tiled(y = 0 ... src->size.y, x = 0 ... src->size.x)
+    if (params.degamma) {
+        foreach_tiled(y = 0 ... src.size.y, x = 0 ... src.size.x)
         {
-            uint p = (x + y * src->size.x) * num_channels;
+            uint p = (x + y * src.size.x) * num_channels;
             for (uniform int i = 0; i < num_channels; i++) {
                 uint c = p + i;
-                // TODO: This texture should be writeonly!
-                src->data[c] = float_to_byte(pow(byte_to_float(src->data[c]), GAMMA), false);
+                degamma.data[c] = pow(byte_to_float(src.data[c]), GAMMA);
             }
         }
     }
 
-    foreach_tiled (y = 0 ... dst->size.y, x = 0 ... dst->size.x) {
+    foreach_tiled (y = 0 ... dst.size.y, x = 0 ... dst.size.x) {
         float<2> uv = {x, y};
         // Use the center of each pixel, not the top-left:
         uv += 0.5f;
         // Convert to uniform space:
         uv *= inv_target_size;
 
-        const float<4> col = resample_internal(*src, uv, num_channels);
+        float<4> col;
+        if (params.degamma)
+            col = resample_internal(degamma, uv, num_channels);
+        else
+            col = resample_internal(src, uv, num_channels);
 
         for (uniform int i = 0; i < num_channels; i++)
-            dst->data[(x + y * dst->size.x) * num_channels + i] = float_to_byte(col[i], params->gamma);
+            dst.data[(x + y * dst.size.x) * num_channels + i] = float_to_byte(col[i], params.gamma);
     }
 }

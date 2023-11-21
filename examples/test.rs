@@ -28,7 +28,7 @@ fn main() {
             println!("Downsampling started!");
             let params = Parameters {
                 // Input stb Image is gamma-corrected (i.e. expects to be passed through a CRT with exponent 2.2)
-                degamma: true,
+                degamma: false,
                 // Output image is PNG which must be stored with a gamma of 1/2.2
                 gamma: true,
             };

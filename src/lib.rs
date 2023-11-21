@@ -100,15 +100,24 @@ pub fn downsample(
 
     let num_channels = src.format.num_channels();
 
-    let src = ispc::downsample_ispc::Image {
+    let src_raw = ispc::downsample_ispc::Image {
         data: src.pixels.as_ptr() as *mut _,
         __bindgen_padding_0: 0,
-        // TODO: Use the builtin type when ISPC 1.22 is released
-        // https://github.com/ispc/ispc/issues/2650
         size: ispc::downsample_ispc::uint32_t2 {
             v: [src.width, src.height],
         },
     };
+
+    let mut degamma = params.degamma.then(|| {
+        let mut degamma = vec![0f32; (src.width * src.height * num_channels as u32) as usize];
+        ispc::downsample_ispc::FloatImage {
+            data: degamma.as_mut_ptr(),
+            __bindgen_padding_0: 0,
+            size: ispc::downsample_ispc::uint32_t2 {
+                v: [src.width, src.height],
+            },
+        }
+    });
 
     let mut output = vec![0; (target_width * target_height * num_channels as u32) as usize];
 
@@ -120,7 +129,15 @@ pub fn downsample(
         },
     };
 
-    unsafe { ispc::downsample_ispc::resample(&params.to_ispc(), &src, &mut dst, num_channels) }
+    unsafe {
+        ispc::downsample_ispc::resample(
+            &params.to_ispc(),
+            &src_raw,
+            degamma.as_mut().map_or(std::ptr::null_mut(), |x| x),
+            &mut dst,
+            num_channels,
+        )
+    }
 
     output
 }
