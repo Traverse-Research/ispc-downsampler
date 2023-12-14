@@ -35,3 +35,7 @@ harness = false
 
 [features]
 ispc = ["ispc_compile"]
+
+[patch.crates-io]
+# Includes https://github.com/Twinklebear/ispc-rs/commit/4e33959af030f59b2ab6696095a021ad919005dc
+ispc_compile = { git = "https://github.com/Twinklebear/ispc-rs", rev = "3b5c0b4" }
