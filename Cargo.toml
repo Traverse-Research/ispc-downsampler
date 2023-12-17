@@ -20,7 +20,7 @@ include = [
 ispc_rt = "2"
 
 [build-dependencies]
-ispc_compile = { version = "2", optional = true }
+ispc_compile = { version = "2.0.1", optional = true }
 ispc_rt = "2"
 
 [dev-dependencies]
@@ -35,7 +35,3 @@ harness = false
 
 [features]
 ispc = ["ispc_compile"]
-
-[patch.crates-io]
-# Includes https://github.com/Twinklebear/ispc-rs/commit/4e33959af030f59b2ab6696095a021ad919005dc
-ispc_compile = { git = "https://github.com/Twinklebear/ispc-rs", rev = "3b5c0b4" }
