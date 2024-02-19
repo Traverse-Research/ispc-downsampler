@@ -82,7 +82,7 @@ struct CachedWeight {
 
 pub(crate) fn calculate_weights(src: u32, target: u32, filter_scale: f32) -> Vec<CachedWeight> {
     assert!(
-        src > target,
+        src >= target,
         "Trying to use downsampler to upsample or perform an operation which will cause no changes"
     );
     // Every line of weights is based on the start and end of the line, and its "center" which has the biggest weight.
