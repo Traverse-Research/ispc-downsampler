@@ -40,7 +40,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ISPC kernels
+          name: ISPC kernels Ubuntu
           path: |
             src/ispc/downsample_ispc.rs
             src/ispc/lib*.a
@@ -72,7 +72,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ISPC kernels
+          name: ISPC kernels macOS
           path: |
             src/ispc/lib*.a
 
@@ -104,6 +104,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ISPC kernels
+          name: ISPC kernels Windows
           path: |
             src/ispc/*.lib
