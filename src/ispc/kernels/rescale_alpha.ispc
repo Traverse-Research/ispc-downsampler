@@ -88,7 +88,7 @@ uniform float find_alpha_scale_for_coverage(uniform Image image, uniform float d
     // compared to mip 0
     // TO-DO: Figure out if this should be exposed
     uniform float alpha_scale_range_start = 0.0;
-    uniform float alpha_scale_range_end = 32.0;
+    uniform float alpha_scale_range_end = 8.0;
 
     uniform float alpha_scale = 1.0;
 
@@ -101,7 +101,7 @@ uniform float find_alpha_scale_for_coverage(uniform Image image, uniform float d
 
     // 10-step binary search for the alpha multiplier that best matches
     // the desired alpha coverage
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 10; i++) {
         uniform float current_coverage = calculate_scaled_alpha_coverage(image, alpha_cutoff, alpha_scale);
         uniform float coverage_diff = current_coverage - desired_coverage;
 
