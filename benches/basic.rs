@@ -4,18 +4,20 @@ use resize::{px::RGB, Type::Lanczos3};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
 
+const DOWNSCALE: usize = 4;
+
 pub fn ispc_downsampler(c: &mut Criterion) {
     if let LoadResult::ImageU8(img) = load(Path::new("test_assets/square_test.png")) {
         let src_fmt = if img.data.len() / (img.width * img.height) == 4 {
-            Format::RGBA8
+            Format::Rgba8
         } else {
-            Format::RGB8
+            Format::Rgb8
         };
 
         let src_img = Image::new(&img.data, img.width as u32, img.height as u32, src_fmt);
 
-        let target_width = (img.width / 4) as u32;
-        let target_height = (img.height / 4) as u32;
+        let target_width = (img.width / DOWNSCALE) as u32;
+        let target_height = (img.height / DOWNSCALE) as u32;
 
         c.bench_function("Downsample `square_test.png` using ispc_downsampler", |b| {
             b.iter(|| downsample(&src_img, target_width, target_height))
@@ -25,8 +27,8 @@ pub fn ispc_downsampler(c: &mut Criterion) {
 
 pub fn resize_rs(c: &mut Criterion) {
     if let LoadResult::ImageU8(img) = load(Path::new("test_assets/square_test.png")) {
-        let target_width = img.width / 4;
-        let target_height = img.height / 4;
+        let target_width = img.width / DOWNSCALE;
+        let target_height = img.height / DOWNSCALE;
 
         let src = img
             .data
@@ -34,10 +36,9 @@ pub fn resize_rs(c: &mut Criterion) {
             .map(|v| RGB::new(v[0], v[1], v[2]))
             .collect::<Vec<_>>();
 
-        let mut dst = vec![RGB::new(0, 0, 0); target_width * target_height];
-
         c.bench_function("Downsample `square_test.png` using resize", |b| {
             b.iter(|| {
+                let mut dst = vec![RGB::new(0, 0, 0); target_width * target_height];
                 let mut resizer = resize::new(
                     img.width,
                     img.height,
