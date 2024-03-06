@@ -118,6 +118,23 @@ void clean_and_write_2_channels(varying float<2> color, uniform uint8* varying p
     pixel_ptr[1] = clamp(color[1], 0.0f, 255.0f);
 }
 
+uint8<3> sample_3_channels(const uniform uint8* varying pixel_ptr) {
+    // Memory reinterpretation to read all channels at once rather than one-by-one.
+    // While testing, this proved more performant than reading one-by-one.
+    const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
+    varying uint8<3> dst = {0, 0, 0};
+    dst = *pixel_ptr3;
+}
+
+void clean_and_write_3_channels(varying float<3> color, uniform uint8* varying pixel_ptr) {
+    // The final color is a sum of numbers that are multiplied by the weights of their respective pixels.
+    // Because of their numbers, floating point precision leads to the final color being potentially outside of the 0-255 range by a slight margin.
+    // This would cause an underflow/overflow, which we avoid with the clamps.
+    pixel_ptr[0] = clamp(color[0], 0.0f, 255.0f);
+    pixel_ptr[1] = clamp(color[1], 0.0f, 255.0f);
+    pixel_ptr[2] = clamp(color[2], 0.0f, 255.0f);
+}
+
 uint8<4> sample_4_channels(const uniform uint8* varying pixel_ptr) {
     const uniform uint8<4>* pixel_ptr4 = (const uniform uint8<4>*)(pixel_ptr);
     varying uint8<4> dst = {0, 0, 0, 0};
@@ -170,7 +187,7 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
         if (num_channels == 1)
             clean_and_write_1_channel(color1, scratch_space + scratch_write_address);
         else if (num_channels == 2)
-            clean_and_write_3_channels(color2, scratch_space + scratch_write_address);
+            clean_and_write_2_channels(color2, scratch_space + scratch_write_address);
         else if (num_channels == 3)
             clean_and_write_3_channels(color3, scratch_space + scratch_write_address);
         else
@@ -183,6 +200,9 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
         uint32 src_height_start = vertical_weight_collection->starts[y];
         uint32 num_vertical_weights = vertical_weight_collection->weight_counts[y];
         float* vertical_weights = vertical_weight_collection->values[y];
+
+        float<1> color1 = {0.0f};
+        float<2> color2 = {0.0f, 0.0f};
         float<3> color3 = {0.0f, 0.0f, 0.0f};
         float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
         for (uint32 i = 0; i < num_vertical_weights; i++) {
