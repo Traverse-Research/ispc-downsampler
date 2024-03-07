@@ -90,6 +90,34 @@ struct SampleWeights {
     uniform const WeightCollection* horizontal_weights;
 };
 
+uint8<1> sample_1_channel(const uniform uint8* varying pixel_ptr) {
+    const uniform uint8<1>* pixel_ptr1 = (const uniform uint8<1>*)(pixel_ptr);
+    varying uint8<1> dst = {0};
+    dst = *pixel_ptr1;
+    return dst;
+}
+
+void clean_and_write_1_channel(varying float<1> color, uniform uint8* varying pixel_ptr) {
+    pixel_ptr[0] = clamp(color[0], 0.0f, 255.0f);
+}
+
+uint8<2> sample_2_channels(const uniform uint8* varying pixel_ptr) {
+    // Memory reinterpretation to read all channels at once rather than one-by-one.
+    // While testing, this proved more performant than reading one-by-one.
+    const uniform uint8<2>* pixel_ptr2 = (const uniform uint8<2>*)(pixel_ptr);
+    varying uint8<2> dst = {0, 0};
+    dst = *pixel_ptr2;
+    return dst;
+}
+
+void clean_and_write_2_channels(varying float<2> color, uniform uint8* varying pixel_ptr) {
+    // The final color is a sum of numbers that are multiplied by the weights of their respective pixels.
+    // Because of their numbers, floating point precision leads to the final color being potentially outside of the 0-255 range by a slight margin.
+    // This would cause an underflow/overflow, which we avoid with the clamps.
+    pixel_ptr[0] = clamp(color[0], 0.0f, 255.0f);
+    pixel_ptr[1] = clamp(color[1], 0.0f, 255.0f);
+}
+
 uint8<3> sample_3_channels(const uniform uint8* varying pixel_ptr) {
     // Memory reinterpretation to read all channels at once rather than one-by-one.
     // While testing, this proved more performant than reading one-by-one.
@@ -136,6 +164,8 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
         uint32 num_horizontal_weights = horizontal_weight_collection->weight_counts[x];
         float* horizontal_weights = horizontal_weight_collection->values[x];
 
+        float<1> color1 = {0.0f};
+        float<2> color2 = {0.0f, 0.0f};
         float<3> color3 = {0.0f, 0.0f, 0.0f};
         float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
         for (uint32 i = 0; i < num_horizontal_weights; i++) {
@@ -143,7 +173,11 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
             uint32 src_x = src_width_start + i;
             uint64 src_read_address = (y * src_width + src_x) * num_channels;
 
-            if (num_channels == 3)
+            if (num_channels == 1)
+                color1 += sample_1_channel(src_data + src_read_address) * weight;
+            else if (num_channels == 2)
+                color2 += sample_2_channels(src_data + src_read_address) * weight;
+            else if (num_channels == 3)
                 color3 += sample_3_channels(src_data + src_read_address) * weight;
             else
                 color4 += sample_4_channels(src_data + src_read_address) * weight;
@@ -151,7 +185,11 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
 
         uint64 scratch_write_address = (y * target_width + x) * num_channels;
 
-        if (num_channels == 3)
+        if (num_channels == 1)
+            clean_and_write_1_channel(color1, scratch_space + scratch_write_address);
+        else if (num_channels == 2)
+            clean_and_write_2_channels(color2, scratch_space + scratch_write_address);
+        else if (num_channels == 3)
             clean_and_write_3_channels(color3, scratch_space + scratch_write_address);
         else
             clean_and_write_4_channels(color4, scratch_space + scratch_write_address);
@@ -163,6 +201,9 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
         uint32 src_height_start = vertical_weight_collection->starts[y];
         uint32 num_vertical_weights = vertical_weight_collection->weight_counts[y];
         float* vertical_weights = vertical_weight_collection->values[y];
+
+        float<1> color1 = {0.0f};
+        float<2> color2 = {0.0f, 0.0f};
         float<3> color3 = {0.0f, 0.0f, 0.0f};
         float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
         for (uint32 i = 0; i < num_vertical_weights; i++) {
@@ -173,7 +214,11 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
             uniform uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space + scratch_read_address);
             uint8<3> scratch_color = *scratch_pixel_ptr;
 
-            if (num_channels == 3)
+            if (num_channels == 1)
+                color1 += sample_1_channel(scratch_space + scratch_read_address) * weight;
+            else if (num_channels == 2)
+                color2 += sample_2_channels(scratch_space + scratch_read_address) * weight;
+            else if (num_channels == 3)
                 color3 += sample_3_channels(scratch_space + scratch_read_address) * weight;
             else
                 color4 += sample_4_channels(scratch_space + scratch_read_address) * weight;
@@ -181,7 +226,12 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
 
         uint64 out_write_address = (y * target_width + x) * num_channels;
         assert(out_write_address < target_height * target_width * num_channels);
-        if (num_channels == 3)
+
+        if (num_channels == 1)
+            clean_and_write_1_channel(color1, out_data + out_write_address);
+        else if (num_channels == 2)
+            clean_and_write_2_channels(color2, out_data + out_write_address);
+        else if (num_channels == 3)
             clean_and_write_3_channels(color3, out_data + out_write_address);
         else
             clean_and_write_4_channels(color4, out_data + out_write_address);

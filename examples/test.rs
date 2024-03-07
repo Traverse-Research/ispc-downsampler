@@ -1,4 +1,4 @@
-use image::{RgbImage, RgbaImage};
+use image::{GrayAlphaImage, GrayImage, RgbImage, RgbaImage};
 use ispc_downsampler::{downsample_with_custom_scale, Format, Image};
 use stb_image::image::{load, LoadResult};
 use std::path::Path;
@@ -11,10 +11,18 @@ fn main() {
         LoadResult::ImageU8(img) => {
             assert!(!img.data.is_empty());
 
-            let src_fmt = if img.data.len() / (img.width * img.height) == 4 {
+            let num_channels = img.data.len() / (img.width * img.height);
+
+            let src_fmt = if num_channels == 4 {
                 Format::Rgba8
-            } else {
+            } else if num_channels == 3 {
                 Format::Rgb8
+            } else if num_channels == 2 {
+                Format::Rg8
+            } else if num_channels == 1 {
+                Format::R8
+            } else {
+                panic!("We expect a number of channels in the [1, 4] range");
             };
 
             println!("Loaded image!");
@@ -32,6 +40,22 @@ fn main() {
 
             std::fs::create_dir_all("example_outputs").unwrap();
             match src_fmt {
+                Format::R8 => {
+                    let save_image =
+                        GrayImage::from_vec(target_width, target_height, downsampled_pixels)
+                            .unwrap();
+                    save_image
+                        .save("example_outputs/square_test_result.png")
+                        .unwrap()
+                }
+                Format::Rg8 => {
+                    let save_image =
+                        GrayAlphaImage::from_vec(target_width, target_height, downsampled_pixels)
+                            .unwrap();
+                    save_image
+                        .save("example_outputs/square_test_result.png")
+                        .unwrap()
+                }
                 Format::Rgba8 | Format::Srgba8 => {
                     let save_image =
                         RgbaImage::from_vec(target_width, target_height, downsampled_pixels)
