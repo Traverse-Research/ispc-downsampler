@@ -124,6 +124,7 @@ uint8<3> sample_3_channels(const uniform uint8* varying pixel_ptr) {
     const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
     varying uint8<3> dst = {0, 0, 0};
     dst = *pixel_ptr3;
+    return dst;
 }
 
 void clean_and_write_3_channels(varying float<3> color, uniform uint8* varying pixel_ptr) {
