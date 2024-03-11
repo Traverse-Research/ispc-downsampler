@@ -24,7 +24,7 @@ ispc_compile = { version = "2.0.1", optional = true }
 ispc_rt = "2"
 
 [dev-dependencies]
-image = "0.24.1"
+image = "0.25.0"
 stb_image = "0.3.0"
 criterion = "0.5"
 resize = "0.7"
