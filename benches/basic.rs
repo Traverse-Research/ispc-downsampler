@@ -9,9 +9,9 @@ const DOWNSCALE: usize = 4;
 pub fn ispc_downsampler(c: &mut Criterion) {
     if let LoadResult::ImageU8(img) = load(Path::new("test_assets/square_test.png")) {
         let src_fmt = if img.data.len() / (img.width * img.height) == 4 {
-            Format::Rgba8
+            Format::Rgba8Unorm
         } else {
-            Format::Rgb8
+            Format::Rgb8Unorm
         };
 
         let src_img = Image::new(&img.data, img.width as u32, img.height as u32, src_fmt);
@@ -20,7 +20,7 @@ pub fn ispc_downsampler(c: &mut Criterion) {
         let target_height = (img.height / DOWNSCALE) as u32;
 
         c.bench_function("Downsample `square_test.png` using ispc_downsampler", |b| {
-            b.iter(|| downsample(&src_img, target_width, target_height))
+            b.iter(|| downsample(&src_img, target_width, target_height, src_fmt.pixel_size()))
         });
     }
 }

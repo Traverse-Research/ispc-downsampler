@@ -1,22 +1,51 @@
 use std::{collections::HashMap, rc::Rc};
 
-use ispc::downsample_ispc::{SampleWeights, WeightDimensions};
 use ispc::WeightCollection;
 
 mod ispc;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum Format {
-    Rgb8,
+    Rgb8Unorm,
+    Rgb8Snorm,
     Srgb8,
-    Rgba8,
+    Rgba8Unorm,
+    Rgba8Snorm,
     Srgba8,
 }
 impl Format {
-    fn num_channels(&self) -> u8 {
+    pub fn num_channels(&self) -> usize {
         match self {
-            Self::Rgb8 | Self::Srgb8 => 3,
-            Self::Rgba8 | Self::Srgba8 => 4,
+            Self::Rgb8Unorm | Self::Rgb8Snorm | Self::Srgb8 => 3,
+            Self::Rgba8Unorm | Self::Rgba8Snorm | Self::Srgba8 => 4,
+        }
+    }
+
+    pub fn pixel_size(&self) -> usize {
+        self.channel_size_in_bytes() * self.num_channels()
+    }
+
+    pub fn channel_size_in_bytes(&self) -> usize {
+        match self {
+            Format::Rgb8Unorm |
+            Format::Rgb8Snorm |
+            Format::Srgb8 |
+            Format::Rgba8Unorm |
+            Format::Rgba8Snorm |
+            Format::Srgba8 => 1,
+        }
+    }
+}
+
+impl From<Format> for ispc::downsample_ispc::PixelFormat {
+    fn from(value: Format) -> Self {
+        match value {
+            Format::Rgb8Unorm => ispc::PixelFormat_Rgb8Unorm,
+            Format::Rgb8Snorm => ispc::PixelFormat_Rgb8Snorm,
+            Format::Srgb8 => ispc::PixelFormat_Rgb8Unorm,
+            Format::Rgba8Unorm => ispc::PixelFormat_Rgba8Unorm,
+            Format::Rgba8Snorm => ispc::PixelFormat_Rgba8Snorm,
+            Format::Srgba8 => ispc::PixelFormat_Rgba8Unorm,
         }
     }
 }
@@ -54,7 +83,7 @@ pub fn scale_alpha_to_original_coverage(
     alpha_cutoff: Option<f32>,
 ) -> Vec<u8> {
     assert!(
-        matches!(src.format, Format::Rgba8),
+        matches!(src.format, Format::Rgba8Unorm | Format::Rgba8Snorm),
         "Cannot retain alpha coverage on image with no alpha channel"
     );
     let mut alpha_scaled_data = downsampled.pixels.to_vec();
@@ -88,7 +117,7 @@ pub(crate) fn calculate_weights(src: u32, target: u32, filter_scale: f32) -> Vec
     // Every line of weights is based on the start and end of the line, and its "center" which has the biggest weight.
     // These weight lines follow a pattern, so we can skip calculating some of them by caching all different line we get.
     // For that purpose, we first determine the variables which define the line.
-    let mut variables = vec![WeightDimensions::default(); target as usize];
+    let mut variables = vec![ispc::WeightDimensions::default(); target as usize];
 
     unsafe {
         ispc::downsample_ispc::calculate_weight_variables(
@@ -153,8 +182,8 @@ pub(crate) fn calculate_weights(src: u32, target: u32, filter_scale: f32) -> Vec
 /// Will panic if the target dimensions are the same as the source image's.
 ///
 /// For a more fine-tunable version of this function, see [downsample_with_custom_scale].
-pub fn downsample(src: &Image, target_width: u32, target_height: u32) -> Vec<u8> {
-    downsample_with_custom_scale(src, target_width, target_height, 3.0)
+pub fn downsample(src: &Image, target_width: u32, target_height: u32, pixel_stride_in_bytes: usize) -> Vec<u8> {
+    downsample_with_custom_scale(src, target_width, target_height, 3.0, pixel_stride_in_bytes)
 }
 
 /// Version of [downsample] which allows for a custom filter scale, thus trading between speed and final image quality.
@@ -170,6 +199,7 @@ pub fn downsample_with_custom_scale(
     target_width: u32,
     target_height: u32,
     filter_scale: f32,
+    pixel_stride_in_bytes: usize,
 ) -> Vec<u8> {
     assert!(src.width != target_width || src.height != target_height, "Trying to downsample to an image of the same resolution as the source image. This operation can be avoided.");
     assert!(src.width >= target_width, "The width of the source image is less than the target's width. You are trying to upsample rather than downsample");
@@ -178,6 +208,8 @@ pub fn downsample_with_custom_scale(
         filter_scale > 0.0,
         "filter_scale must be more than 0.0 when downsampling."
     );
+    assert!(src.format.pixel_size() <= pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
+
 
     // The weights are calculated per-axis, and are only based on the source and target dimensions of that axis.
     // Because of that, if both axes have the same source and target dimensions, they will have the same weights.
@@ -196,7 +228,7 @@ pub fn downsample_with_custom_scale(
     let mut output =
         vec![0u8; (target_width * target_height * src.format.num_channels() as u32) as usize];
 
-    let weight_cache = SampleWeights {
+    let weight_cache = ispc::SampleWeights {
         vertical_weights: height_weights.ispc_representation(),
         horizontal_weights: width_weights.ispc_representation(),
     };
@@ -208,10 +240,12 @@ pub fn downsample_with_custom_scale(
                 src.height,
                 target_width,
                 target_height,
+                pixel_stride_in_bytes as u32,
                 &weight_cache as *const _,
                 scratch_space.as_mut_ptr(),
                 src.pixels.as_ptr(),
                 output.as_mut_ptr(),
+                ispc::PixelFormat::from(src.format),
             );
         } else {
             ispc::downsample_ispc::resample_with_cached_weights_4(
@@ -219,10 +253,12 @@ pub fn downsample_with_custom_scale(
                 src.height,
                 target_width,
                 target_height,
+                pixel_stride_in_bytes as u32,
                 &weight_cache as *const _,
                 scratch_space.as_mut_ptr(),
                 src.pixels.as_ptr(),
                 output.as_mut_ptr(),
+                ispc::PixelFormat::from(src.format),
             );
         }
     }
