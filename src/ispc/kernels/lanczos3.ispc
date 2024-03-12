@@ -1,3 +1,5 @@
+#include "math.ispc"
+#include "formats.ispc"
 #include "image.ispc"
 
 const uniform float M_PI = 3.14159265358979;
@@ -90,43 +92,66 @@ struct SampleWeights {
     uniform const WeightCollection* horizontal_weights;
 };
 
-uint8<3> sample_3_channels(const uniform uint8* varying pixel_ptr) {
+float<3> sample_3_channels(const uniform uint8* varying pixel_ptr, uniform PixelFormat pixel_format) {
     // Memory reinterpretation to read all channels at once rather than one-by-one.
     // While testing, this proved more performant than reading one-by-one.
     const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
-    varying uint8<3> dst = {0, 0, 0};
-    dst = *pixel_ptr3;
+    varying float<3> dst = {0.0f, 0.0f, 0.0f};
+    dst = *pixel_ptr3 / 255.0f;
+
+    if (is_snorm(pixel_format)) {
+        dst = dst * 2.0f - 1.0f;
+    }
     return dst;
 }
 
-void clean_and_write_3_channels(varying float<3> color, uniform uint8* varying pixel_ptr) {
+float<4> sample_4_channels(const uniform uint8* varying pixel_ptr) {
+    const uniform uint8<4>* pixel_ptr4 = (const uniform uint8<4>*)(pixel_ptr);
+    varying float<4> dst = {0.0f, 0.0f, 0.0f, 0.0f};
+    dst = *pixel_ptr4 / 255.0f;
+
+    return dst;
+}
+
+void clean_and_write_3_channels(varying float<3> color, uniform uint8* varying pixel_ptr, uniform PixelFormat pixel_format) {
     // The final color is a sum of numbers that are multiplied by the weights of their respective pixels.
     // Because of their numbers, floating point precision leads to the final color being potentially outside of the 0-255 range by a slight margin.
     // This would cause an underflow/overflow, which we avoid with the clamps.
-    pixel_ptr[0] = clamp(color[0], 0.0f, 255.0f);
-    pixel_ptr[1] = clamp(color[1], 0.0f, 255.0f);
-    pixel_ptr[2] = clamp(color[2], 0.0f, 255.0f);
-}
+    if (is_snorm(pixel_format)) {
+        // Assumption: Snorm formats are only used for normal maps, so we normalize them to preserve vector length.
+        color = normalize(color);
+        color = color * 0.5f + 0.5f;
+    } else {
+        color[0] = clamp(color[0], 0.0f, 1.0f);
+        color[1] = clamp(color[1], 0.0f, 1.0f);
+        color[2] = clamp(color[2], 0.0f, 1.0f);
+    }
+    color *= 255.0f;
 
-uint8<4> sample_4_channels(const uniform uint8* varying pixel_ptr) {
-    const uniform uint8<4>* pixel_ptr4 = (const uniform uint8<4>*)(pixel_ptr);
-    varying uint8<4> dst = {0, 0, 0, 0};
-    dst = *pixel_ptr4;
-    return dst;
+    pixel_ptr[0] = color[0];
+    pixel_ptr[1] = color[1];
+    pixel_ptr[2] = color[2];
 }
 
 void clean_and_write_4_channels(varying float<4> color, uniform uint8* varying pixel_ptr) {
-    pixel_ptr[0] = clamp(color.x, 0.0f, 255.0f);
-    pixel_ptr[1] = clamp(color.y, 0.0f, 255.0f);
-    pixel_ptr[2] = clamp(color.z, 0.0f, 255.0f);
-    pixel_ptr[3] = clamp(color.w, 0.0f, 255.0f);
+    color[0] = clamp(color[0], 0.0f, 1.0f);
+    color[1] = clamp(color[1], 0.0f, 1.0f);
+    color[2] = clamp(color[2], 0.0f, 1.0f);
+    color[3] = clamp(color[3], 0.0f, 1.0f);
+    color *= 255.0f;
+
+    pixel_ptr[0] = color[0];
+    pixel_ptr[1] = color[1];
+    pixel_ptr[2] = color[2];
+    pixel_ptr[3] = color[3];
 }
 
 
-void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height,
-    uniform const SampleWeights * uniform cached_weights, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
+inline void resample_with_cached_weights(uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height, uniform uint32 pixel_stride,
+    uniform const SampleWeights * uniform cached_weights, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[], uniform PixelFormat pixel_format) {
     uniform WeightCollection * uniform vertical_weight_collection = cached_weights->vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = cached_weights->horizontal_weights;
+    const uniform uint num_channels = channel_count(pixel_format);
 
     // Accumulate only along the width for each pixel, sampling from the source image
     // Results in the source image being downsampled to src_height X target_width
@@ -143,17 +168,17 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
             uint32 src_x = src_width_start + i;
             uint64 src_read_address = (y * src_width + src_x) * num_channels;
 
-            if (num_channels == 3)
-                color3 += sample_3_channels(src_data + src_read_address) * weight;
-            else
+            if (channel_count(pixel_format) == 3)
+                color3 += sample_3_channels(src_data + src_read_address, pixel_format) * weight;
+            if (channel_count(pixel_format) == 4)
                 color4 += sample_4_channels(src_data + src_read_address) * weight;
         }
 
         uint64 scratch_write_address = (y * target_width + x) * num_channels;
 
-        if (num_channels == 3)
-            clean_and_write_3_channels(color3, scratch_space + scratch_write_address);
-        else
+        if (channel_count(pixel_format) == 3)
+            clean_and_write_3_channels(color3, scratch_space + scratch_write_address, pixel_format);
+        if (channel_count(pixel_format) == 4)
             clean_and_write_4_channels(color4, scratch_space + scratch_write_address);
     }
     // Accumulate the scratch space data along the height
@@ -173,31 +198,31 @@ void resample_with_cached_weights(uniform uint32 num_channels, uniform uint32 sr
             uniform uint8<3>* varying scratch_pixel_ptr = (uniform uint8<3>* varying)(scratch_space + scratch_read_address);
             uint8<3> scratch_color = *scratch_pixel_ptr;
 
-            if (num_channels == 3)
-                color3 += sample_3_channels(scratch_space + scratch_read_address) * weight;
-            else
+            if (channel_count(pixel_format) == 3)
+                color3 += sample_3_channels(scratch_space + scratch_read_address, pixel_format) * weight;
+            if (channel_count(pixel_format) == 4)
                 color4 += sample_4_channels(scratch_space + scratch_read_address) * weight;
         }
 
         uint64 out_write_address = (y * target_width + x) * num_channels;
         assert(out_write_address < target_height * target_width * num_channels);
-        if (num_channels == 3)
-            clean_and_write_3_channels(color3, out_data + out_write_address);
-        else
+        if (channel_count(pixel_format) == 3)
+            clean_and_write_3_channels(color3, out_data + out_write_address, pixel_format);
+        if (channel_count(pixel_format) == 4)
             clean_and_write_4_channels(color4, out_data + out_write_address);
     }
 }
 
 /// scratch_space must be at least src_height * target_width pixels big
-export void resample_with_cached_weights_3(uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height,
-    uniform const SampleWeights * uniform cached_weights, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
-    uniform const uint32 num_channels = 3;
-    resample_with_cached_weights(num_channels, src_width, src_height, target_width, target_height, cached_weights, scratch_space, src_data, out_data);
+export void resample_with_cached_weights_3(uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height, uniform uint32 pixel_stride,
+    uniform const SampleWeights * uniform cached_weights, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[], uniform PixelFormat pixel_format) {
+    assume(channel_count(pixel_format) == 3);
+    resample_with_cached_weights(src_width, src_height, target_width, target_height, pixel_stride, cached_weights, scratch_space, src_data, out_data, pixel_format);
 }
 
 /// scratch_space must be at least src_height * target_width pixels big
-export void resample_with_cached_weights_4(uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height,
-    uniform const SampleWeights * uniform cached_weights, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[]) {
-    uniform const uint32 num_channels = 4;
-    resample_with_cached_weights(num_channels, src_width, src_height, target_width, target_height, cached_weights, scratch_space, src_data, out_data);
+export void resample_with_cached_weights_4(uniform uint32 src_width, uniform uint32 src_height, uniform uint32 target_width, uniform uint32 target_height, uniform uint32 pixel_stride,
+    uniform const SampleWeights * uniform cached_weights, uniform uint8 scratch_space[], uniform const uint8 src_data[], uniform uint8 out_data[], uniform PixelFormat pixel_format) {
+    assume(channel_count(pixel_format) == 4);
+    resample_with_cached_weights(src_width, src_height, target_width, target_height, pixel_stride, cached_weights, scratch_space, src_data, out_data, pixel_format);
 }

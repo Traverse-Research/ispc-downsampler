@@ -1,9 +1,11 @@
 #![allow(deref_nullptr)]
 
 use ispc_rt::ispc_module;
+
 use std::rc::Rc;
 
 use crate::CachedWeight;
+pub use downsample_ispc::*;
 ispc_module!(downsample_ispc);
 
 // `WeightDimensions` is a generated struct, so we cannot realistically add derivable traits to it.
