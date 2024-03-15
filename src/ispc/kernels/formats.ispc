@@ -1,3 +1,4 @@
+#pragma once
 enum PixelFormat {
     Rgba8Unorm = 0,
     Rgb8Unorm,
@@ -5,7 +6,7 @@ enum PixelFormat {
     Rgb8Snorm,
 };
 
-uniform bool is_snorm(uniform PixelFormat format) {
+inline uniform bool is_snorm(uniform PixelFormat format) {
     switch (format) {
         case Rgba8Snorm:
         case Rgb8Snorm:
@@ -15,7 +16,7 @@ uniform bool is_snorm(uniform PixelFormat format) {
     }
 }
 
-uniform uint32 channel_count(uniform PixelFormat format) {
+inline uniform uint32 channel_count(uniform PixelFormat format) {
     switch (format) {
         case Rgba8Unorm:
         case Rgba8Snorm:
