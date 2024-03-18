@@ -26,8 +26,13 @@ fn main() {
 
             let now = Instant::now();
             println!("Downsampling started!");
-            let downsampled_pixels =
-                downsample_with_custom_scale(&src_img, target_width, target_height, 1.0, src_fmt.pixel_size());
+            let downsampled_pixels = downsample_with_custom_scale(
+                &src_img,
+                target_width,
+                target_height,
+                1.0,
+                src_fmt.pixel_size(),
+            );
             println!("Finished downsampling in {:.2?}!", now.elapsed());
 
             std::fs::create_dir_all("example_outputs").unwrap();
@@ -48,7 +53,7 @@ fn main() {
                         .save("example_outputs/square_test_result.png")
                         .unwrap()
                 }
-                _ => panic!("Unexpected format encountered.")
+                _ => panic!("Unexpected format encountered."),
             }
         }
         _ => panic!("This test only works with 8-bit per channel textures"),
