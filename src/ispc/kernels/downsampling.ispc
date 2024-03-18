@@ -3,6 +3,8 @@
 #include "image.ispc"
 #include "math.ispc"
 
+
+
 inline float<3> sample_3_channels(const uniform uint8* varying pixel_ptr) {
     // Memory reinterpretation to read all channels at once rather than one-by-one.
     // While testing, this proved more performant than reading one-by-one.
@@ -19,6 +21,28 @@ inline float<4> sample_4_channels(const uniform uint8* varying pixel_ptr) {
     dst = *pixel_ptr4 / 255.0f;
 
     return dst;
+}
+
+inline float<3> sample_normal(const uniform uint8* varying pixel_ptr, uniform NormalMapFormat normal_map_format) {
+    // Memory reinterpretation to read all channels at once rather than one-by-one.
+    // While testing, this proved more performant than reading one-by-one.
+    float<3> normal = {0.0f, 0.0f, 0.0f};
+    switch (normal_map_format) {
+        case R8g8b8: {
+            const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
+            normal = *pixel_ptr3 / 255.0f;
+            break;
+        }
+        case R8g8Encoded: {
+            const uniform uint8<2>* pixel_ptr2 = (const uniform uint8<2>*)(pixel_ptr);
+            normal.x = pixel_ptr2->x / 255.0f;
+            normal.y = pixel_ptr2->y / 255.0f;
+
+            normal.z = sqrt(max(0.01, 1.0 - (normal.x * normal.x + normal.y * normal.y)));
+            break;
+        }
+    }
+    normal = normal * 2.0f + 1.0f;
 }
 
 inline void clean_and_write_3_channels(varying float<3> color, uniform uint8* varying pixel_ptr) {
@@ -47,6 +71,31 @@ inline void clean_and_write_4_channels(varying float<4> color, uniform uint8* va
     pixel_ptr[1] = color[1];
     pixel_ptr[2] = color[2];
     pixel_ptr[3] = color[3];
+}
+
+inline void clean_and_write_normal(varying float<3> normal, uniform uint8* varying pixel_ptr, uniform NormalMapFormat normal_map_format) {
+    normal = normalize(normal);
+    normal = normal * 0.5 + 0.5;
+    switch (normal_map_format) {
+        case R8g8b8: {
+            normal[0] = clamp(normal[0], 0.0f, 1.0f);
+            normal[1] = clamp(normal[1], 0.0f, 1.0f);
+            normal[2] = clamp(normal[2], 0.0f, 1.0f);
+            normal *= 255.0f;
+
+            pixel_ptr[0] = normal[0];
+            pixel_ptr[1] = normal[1];
+            pixel_ptr[2] = normal[2];
+        }
+        case R8g8Encoded: {
+            normal[0] = clamp(normal[0], 0.0f, 1.0f);
+            normal[1] = clamp(normal[1], 0.0f, 1.0f);
+            normal *= 255.0f;
+
+            pixel_ptr[0] = normal[0];
+            pixel_ptr[1] = normal[1];
+        }
+    }
 }
 
 struct SourceImage {
@@ -146,7 +195,7 @@ export void resample_with_cached_weights_4(uniform SourceImage * uniform src, un
 }
 
 /// scratch_space must be at least src_height * dst->width pixels big
-export void downsample_normal_map(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst) {
+export void downsample_normal_map(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform NormalMapFormat normal_map_format) {
     assume(channel_count(src->pixel_format) == 3);
     float<2> ratio = { (float)src->width / (float)dst->width, (float)src->height / (float)dst->height };
     int<2> ceiled = { floor(ratio.x), floor(ratio.y) };
@@ -167,22 +216,20 @@ export void downsample_normal_map(uniform SourceImage * uniform src, uniform Dow
         }
 
 
-        float<3> color3 = {0.0f, 0.0f, 0.0f};
+        float<3> normal = {0.0f, 0.0f, 0.0f};
         for (uint32 i = start.x; i < end.x; i++) {
             for (uint32 j = start.y; j < end.y; j++) {
 
                 uint64 read_address = (j * src->width + i) * src->pixel_stride;
-                color3 += sample_3_channels(src->data + read_address);
+                normal += sample_normal(src->data + read_address, normal_map_format);
             }
         }
 
-        color3 /= pixel_weight;
-        color3 = color3 * 2.0f - 1.0f;
-        color3 = normalize(color3);
-        color3 = color3 * 0.5f + 0.5f;
+        normal /= pixel_weight;
+        normal = normalize(normal);
 
         uint64 out_write_address = (y * dst->width + x) * dst->pixel_stride;
         assert(out_write_address < dst->height * dst->width * dst->pixel_stride);
-        clean_and_write_3_channels(color3, dst->data + out_write_address);
+        clean_and_write_normal(normal, dst->data + out_write_address, normal_map_format);
     }
 }

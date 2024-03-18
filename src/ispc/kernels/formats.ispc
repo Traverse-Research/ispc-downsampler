@@ -26,3 +26,8 @@ inline uniform uint32 channel_count(uniform PixelFormat format) {
             return 3;
     }
 }
+
+enum NormalMapFormat {
+    R8g8b8 = 0,
+    R8g8Encoded,
+};
