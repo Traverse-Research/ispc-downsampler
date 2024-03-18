@@ -1,9 +1,11 @@
 #![allow(deref_nullptr)]
 
 use ispc_rt::ispc_module;
+
 use std::rc::Rc;
 
 use crate::CachedWeight;
+pub use downsample_ispc::*;
 ispc_module!(downsample_ispc);
 
 // `WeightDimensions` is a generated struct, so we cannot realistically add derivable traits to it.
@@ -57,6 +59,33 @@ impl WeightCollection {
     }
 
     pub(crate) fn ispc_representation(&self) -> &downsample_ispc::WeightCollection {
+        &self.ispc_representation
+    }
+}
+
+pub(crate) struct Weights {
+    ispc_representation: downsample_ispc::SampleWeights,
+
+    _horizontal_weights: Rc<WeightCollection>,
+    _vertical_weights: Rc<WeightCollection>,
+}
+
+impl Weights {
+    pub(crate) fn new(
+        horizontal_weights: Rc<WeightCollection>,
+        vertical_weights: Rc<WeightCollection>,
+    ) -> Self {
+        Self {
+            ispc_representation: downsample_ispc::SampleWeights {
+                vertical_weights: vertical_weights.ispc_representation(),
+                horizontal_weights: horizontal_weights.ispc_representation(),
+            },
+            _vertical_weights: vertical_weights,
+            _horizontal_weights: horizontal_weights,
+        }
+    }
+
+    pub(crate) fn ispc_representation(&self) -> &downsample_ispc::SampleWeights {
         &self.ispc_representation
     }
 }
