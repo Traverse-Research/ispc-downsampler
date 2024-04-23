@@ -73,7 +73,7 @@ impl NormalMapFormat {
 }
 
 impl From<NormalMapFormat> for ispc::NormalMapFormat {
-    fn from(value: NormalMapFormat) -> i32 {
+    fn from(value: NormalMapFormat) -> ispc::NormalMapFormat {
         match value {
             NormalMapFormat::R8g8b8 => ispc::NormalMapFormat_R8g8b8,
             NormalMapFormat::R8g8TangentSpaceReconstructedZ => {
@@ -257,11 +257,6 @@ fn precompute_lanczos_weights(
     };
 
     ispc::Weights::new(width_weights, height_weights)
-
-    // ispc::SampleWeights {
-    //     vertical_weights: height_weights.ispc_representation(),
-    //     horizontal_weights: width_weights.ispc_representation(),
-    // }
 }
 
 /// Version of [downsample] which allows for a custom filter scale, thus trading between speed and final image quality.
