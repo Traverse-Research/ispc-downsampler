@@ -31,6 +31,7 @@ inline float<3> sample_normal(const uniform uint8* varying pixel_ptr, uniform No
             const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
 
             normal = *pixel_ptr3 / 255.0f;
+            normal = normal * 2.0f - 1.0f;
             break;
         }
         case R8g8TangentSpaceReconstructedZ: {
@@ -39,12 +40,15 @@ inline float<3> sample_normal(const uniform uint8* varying pixel_ptr, uniform No
             const uniform uint8<2>* pixel_ptr2 = (const uniform uint8<2>*)(pixel_ptr);
             normal.x = pixel_ptr2->x / 255.0f;
             normal.y = pixel_ptr2->y / 255.0f;
+            normal = normal * 2.0f - 1.0f;
 
             normal.z = sqrt(max(0.01, 1.0 - (normal.x * normal.x + normal.y * normal.y)));
             break;
         }
     }
-    normal = normal * 2.0f - 1.0f;
+
+    // print("%\n", length(normal));
+
     return normal;
 }
 

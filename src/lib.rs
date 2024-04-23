@@ -339,6 +339,10 @@ pub fn downsample_with_custom_scale(
     output
 }
 
+/// Downsamples an image that is meant to be used as a normal map.
+/// Uses a box filter instead of a lanczos filter, and normalizes each pixel to preserve unit length for the normals after downsampling.
+///
+/// Returns a `Vec` with the downsampled data. If `normal_map_format.pixel_size() < pixel_stride_in_bytes`, the `Vec` will contain more values than channels than the format has specified, with all pixels in them initialized to 255.
 pub fn downsample_normal_map(
     src: &Image<'_>,
     target_width: u32,
@@ -346,8 +350,9 @@ pub fn downsample_normal_map(
     pixel_stride_in_bytes: usize,
     normal_map_format: NormalMapFormat,
 ) -> Vec<u8> {
-    let mut data =
-        vec![0u8; (target_width * target_height) as usize * pixel_stride_in_bytes];
+    assert!(normal_map_format.pixel_size() <= pixel_stride_in_bytes, "The pixel stride in bytes must be more or equal than the size of a single pixel as described by the format of the normal map.");
+
+    let mut data = vec![255u8; (target_width * target_height) as usize * pixel_stride_in_bytes];
 
     unsafe {
         ispc::downsample_normal_map(

@@ -20,7 +20,15 @@ pub fn ispc_downsampler(c: &mut Criterion) {
         let target_height = (img.height / DOWNSCALE) as u32;
 
         c.bench_function("Downsample `square_test.png` using ispc_downsampler", |b| {
-            b.iter(|| downsample(&src_img, target_width, target_height, src_fmt.pixel_size(), src_fmt))
+            b.iter(|| {
+                downsample(
+                    &src_img,
+                    target_width,
+                    target_height,
+                    src_fmt.pixel_size(),
+                    src_fmt,
+                )
+            })
         });
     }
 }
