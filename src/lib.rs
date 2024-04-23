@@ -51,36 +51,53 @@ impl From<Format> for ispc::downsample_ispc::PixelFormat {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum NormalMapFormat {
     R8g8b8,
-    R8g8Encoded,
+    R8g8TangentSpaceReconstructedZ,
 }
 
-impl From<NormalMapFormat> for ispc::downsample_ispc::NormalMapFormat {
-    fn from(value: NormalMapFormat) -> Self {
-        match value {
-            NormalMapFormat::R8g8b8 => ispc::NormalMapFormat_R8g8b8,
-            NormalMapFormat::R8g8Encoded => ispc::NormalMapFormat_R8g8Encoded,
+impl NormalMapFormat {
+    pub fn pixel_size(self) -> usize {
+        match self {
+            NormalMapFormat::R8g8b8 => 3,
+            NormalMapFormat::R8g8TangentSpaceReconstructedZ => 2,
+        }
+    }
+
+    pub fn channel_size_in_bytes(self) -> usize {
+        match self {
+            Self::R8g8b8 | Self::R8g8TangentSpaceReconstructedZ => 1,
         }
     }
 }
+
+impl From<NormalMapFormat> for ispc::NormalMapFormat {
+    fn from(value: NormalMapFormat) -> i32 {
+        match value {
+            NormalMapFormat::R8g8b8 => ispc::NormalMapFormat_R8g8b8,
+            NormalMapFormat::R8g8TangentSpaceReconstructedZ => {
+                ispc::NormalMapFormat_R8g8TangentSpaceReconstructedZ
+            }
+        }
+    }
+}
+
 /// Describes a source image which can be used for [`downsample()`]
 /// The pixel data is stored as a slice to avoid unnecessarily cloning it.
 pub struct Image<'a> {
     pixels: &'a [u8],
     width: u32,
     height: u32,
-    format: Format,
 }
 
 impl<'a> Image<'a> {
     /// Creates a new source image from the given pixel data slice, dimensions and format.
-    pub fn new(pixels: &'a [u8], width: u32, height: u32, format: Format) -> Self {
+    pub fn new(pixels: &'a [u8], width: u32, height: u32) -> Self {
         Self {
             pixels,
             width,
             height,
-            format,
         }
     }
 }
@@ -95,9 +112,10 @@ pub fn scale_alpha_to_original_coverage(
     src: &Image<'_>,
     downsampled: &Image<'_>,
     alpha_cutoff: Option<f32>,
+    format: Format,
 ) -> Vec<u8> {
     assert!(
-        matches!(src.format, Format::Rgba8Unorm | Format::Rgba8Snorm),
+        matches!(format, Format::Rgba8Unorm | Format::Rgba8Snorm),
         "Cannot retain alpha coverage on image with no alpha channel"
     );
     let mut alpha_scaled_data = downsampled.pixels.to_vec();
@@ -197,12 +215,20 @@ pub(crate) fn calculate_weights(src: u32, target: u32, filter_scale: f32) -> Vec
 ///
 /// For a more fine-tunable version of this function, see [downsample_with_custom_scale].
 pub fn downsample(
-    src: &Image,
+    src: &Image<'_>,
     target_width: u32,
     target_height: u32,
     pixel_stride_in_bytes: usize,
+    format: Format,
 ) -> Vec<u8> {
-    downsample_with_custom_scale(src, target_width, target_height, 3.0, pixel_stride_in_bytes)
+    downsample_with_custom_scale(
+        src,
+        target_width,
+        target_height,
+        3.0,
+        pixel_stride_in_bytes,
+        format,
+    )
 }
 
 fn precompute_lanczos_weights(
@@ -247,13 +273,14 @@ fn precompute_lanczos_weights(
 /// A scale of 1.0 preserves is good if speed is necessary, but still preserves a decent amount of detail.
 /// Anything below is even faster, although the loss of detail becomes clear.
 pub fn downsample_with_custom_scale(
-    src: &Image,
+    src: &Image<'_>,
     target_width: u32,
     target_height: u32,
     filter_scale: f32,
     pixel_stride_in_bytes: usize,
+    format: Format,
 ) -> Vec<u8> {
-    assert!(src.format.pixel_size() <= pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
+    assert!(format.pixel_size() <= pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
 
     let sample_weights = precompute_lanczos_weights(
         src.width,
@@ -265,16 +292,15 @@ pub fn downsample_with_custom_scale(
 
     // The new implementation needs a src_height * target_width intermediate buffer.
     let mut scratch_space =
-        vec![0u8; (src.height * target_width * src.format.num_channels() as u32) as usize];
+        vec![0u8; (src.height * target_width * format.num_channels() as u32) as usize];
 
     let mut output =
-        vec![0u8; (target_width * target_height * src.format.num_channels() as u32) as usize];
+        vec![0u8; (target_width * target_height * format.num_channels() as u32) as usize];
 
     unsafe {
-        if src.format.num_channels() == 3 {
+        if format.num_channels() == 3 {
             ispc::downsample_ispc::resample_with_cached_weights_3(
-                &mut ispc::SourceImage {
-                    pixel_format: ispc::PixelFormat::from(src.format),
+                &ispc::SourceImage {
                     width: src.width,
                     height: src.height,
                     data: src.pixels.as_ptr(),
@@ -286,6 +312,7 @@ pub fn downsample_with_custom_scale(
                     data: output.as_mut_ptr(),
                     pixel_stride: pixel_stride_in_bytes as u32,
                 },
+                ispc::PixelFormat::from(format),
                 &mut ispc::DownsamplingContext {
                     weights: *sample_weights.ispc_representation(),
                     scratch_space: scratch_space.as_mut_ptr(),
@@ -293,8 +320,7 @@ pub fn downsample_with_custom_scale(
             );
         } else {
             ispc::downsample_ispc::resample_with_cached_weights_4(
-                &mut ispc::SourceImage {
-                    pixel_format: ispc::PixelFormat::from(src.format),
+                &ispc::SourceImage {
                     width: src.width,
                     height: src.height,
                     data: src.pixels.as_ptr(),
@@ -306,6 +332,7 @@ pub fn downsample_with_custom_scale(
                     data: output.as_mut_ptr(),
                     pixel_stride: pixel_stride_in_bytes as u32,
                 },
+                ispc::PixelFormat::from(format),
                 &mut ispc::DownsamplingContext {
                     weights: *sample_weights.ispc_representation(),
                     scratch_space: scratch_space.as_mut_ptr(),
@@ -318,18 +345,18 @@ pub fn downsample_with_custom_scale(
 }
 
 pub fn downsample_normal_map(
-    src: &Image,
+    src: &Image<'_>,
     target_width: u32,
     target_height: u32,
     pixel_stride_in_bytes: usize,
     normal_map_format: NormalMapFormat,
 ) -> Vec<u8> {
-    let mut data = vec![0u8; (target_width * target_height) as usize * src.format.pixel_size()];
+    let mut data =
+        vec![0u8; (target_width * target_height) as usize * pixel_stride_in_bytes];
 
     unsafe {
         ispc::downsample_normal_map(
-            &mut ispc::SourceImage {
-                pixel_format: ispc::PixelFormat::from(src.format),
+            &ispc::SourceImage {
                 width: src.width,
                 height: src.height,
                 data: src.pixels.as_ptr(),
@@ -341,7 +368,7 @@ pub fn downsample_normal_map(
                 data: data.as_mut_ptr(),
                 pixel_stride: pixel_stride_in_bytes as u32,
             },
-            normal_map_format.into(),
+            ispc::NormalMapFormat::from(normal_map_format),
         );
     }
 

@@ -64,7 +64,7 @@ impl WeightCollection {
 }
 
 pub(crate) struct Weights {
-    ispc_representation: downsample_ispc::SampleWeights,
+    ispc_representation: SampleWeights,
 
     _horizontal_weights: Rc<WeightCollection>,
     _vertical_weights: Rc<WeightCollection>,
@@ -76,7 +76,7 @@ impl Weights {
         vertical_weights: Rc<WeightCollection>,
     ) -> Self {
         Self {
-            ispc_representation: downsample_ispc::SampleWeights {
+            ispc_representation: SampleWeights {
                 vertical_weights: vertical_weights.ispc_representation(),
                 horizontal_weights: horizontal_weights.ispc_representation(),
             },
@@ -85,7 +85,7 @@ impl Weights {
         }
     }
 
-    pub(crate) fn ispc_representation(&self) -> &downsample_ispc::SampleWeights {
+    pub(crate) fn ispc_representation(&self) -> &SampleWeights {
         &self.ispc_representation
     }
 }

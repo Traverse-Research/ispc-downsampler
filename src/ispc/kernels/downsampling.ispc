@@ -4,7 +4,6 @@
 #include "math.ispc"
 
 
-
 inline float<3> sample_3_channels(const uniform uint8* varying pixel_ptr) {
     // Memory reinterpretation to read all channels at once rather than one-by-one.
     // While testing, this proved more performant than reading one-by-one.
@@ -24,16 +23,19 @@ inline float<4> sample_4_channels(const uniform uint8* varying pixel_ptr) {
 }
 
 inline float<3> sample_normal(const uniform uint8* varying pixel_ptr, uniform NormalMapFormat normal_map_format) {
-    // Memory reinterpretation to read all channels at once rather than one-by-one.
-    // While testing, this proved more performant than reading one-by-one.
     float<3> normal = {0.0f, 0.0f, 0.0f};
     switch (normal_map_format) {
         case R8g8b8: {
+            // Memory reinterpretation to read all channels at once rather than one-by-one.
+            // While testing, this proved more performant than reading one-by-one.
             const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
+
             normal = *pixel_ptr3 / 255.0f;
             break;
         }
-        case R8g8Encoded: {
+        case R8g8TangentSpaceReconstructedZ: {
+            // Memory reinterpretation to read all channels at once rather than one-by-one.
+            // While testing, this proved more performant than reading one-by-one.
             const uniform uint8<2>* pixel_ptr2 = (const uniform uint8<2>*)(pixel_ptr);
             normal.x = pixel_ptr2->x / 255.0f;
             normal.y = pixel_ptr2->y / 255.0f;
@@ -42,7 +44,8 @@ inline float<3> sample_normal(const uniform uint8* varying pixel_ptr, uniform No
             break;
         }
     }
-    normal = normal * 2.0f + 1.0f;
+    normal = normal * 2.0f - 1.0f;
+    return normal;
 }
 
 inline void clean_and_write_3_channels(varying float<3> color, uniform uint8* varying pixel_ptr) {
@@ -76,6 +79,7 @@ inline void clean_and_write_4_channels(varying float<4> color, uniform uint8* va
 inline void clean_and_write_normal(varying float<3> normal, uniform uint8* varying pixel_ptr, uniform NormalMapFormat normal_map_format) {
     normal = normalize(normal);
     normal = normal * 0.5 + 0.5;
+
     switch (normal_map_format) {
         case R8g8b8: {
             normal[0] = clamp(normal[0], 0.0f, 1.0f);
@@ -83,11 +87,12 @@ inline void clean_and_write_normal(varying float<3> normal, uniform uint8* varyi
             normal[2] = clamp(normal[2], 0.0f, 1.0f);
             normal *= 255.0f;
 
-            pixel_ptr[0] = normal[0];
-            pixel_ptr[1] = normal[1];
-            pixel_ptr[2] = normal[2];
+            pixel_ptr[0] = (uint8)normal[0];
+            pixel_ptr[1] = (uint8)normal[1];
+            pixel_ptr[2] = (uint8)normal[2];
+            break;
         }
-        case R8g8Encoded: {
+        case R8g8TangentSpaceReconstructedZ: {
             normal[0] = clamp(normal[0], 0.0f, 1.0f);
             normal[1] = clamp(normal[1], 0.0f, 1.0f);
             normal *= 255.0f;
@@ -99,7 +104,6 @@ inline void clean_and_write_normal(varying float<3> normal, uniform uint8* varyi
 }
 
 struct SourceImage {
-    uniform PixelFormat pixel_format;
     uniform uint32 width;
     uniform uint32 height;
     uniform const uint8* data;
@@ -118,10 +122,10 @@ struct DownsamplingContext {
     uniform uint8* scratch_space;
 };
 
-inline void resample_with_cached_weights(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform DownsamplingContext * uniform ctx) {
+inline void resample_with_cached_weights(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx) {
     uniform WeightCollection * uniform vertical_weight_collection = ctx->weights.vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = ctx->weights.horizontal_weights;
-    const uniform uint num_channels = channel_count(src->pixel_format);
+    const uniform uint num_channels = channel_count(pixel_format);
 
     // Accumulate only along the width for each pixel, sampling from the source image
     // Results in the source image being downsampled to src->height X dst->width
@@ -136,23 +140,23 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
         for (uint32 i = 0; i < num_horizontal_weights; i++) {
             float weight = horizontal_weights[i];
             uint32 src_x = src_width_start + i;
-            uint64 src_read_address = (y * src->width + src_x) * num_channels;
+            uint64 src_read_address = (y * src->width + src_x) * src->pixel_stride;
 
-            if (channel_count(src->pixel_format) == 3)
+            if (channel_count(pixel_format) == 3)
                 color3 += sample_3_channels(src->data + src_read_address) * weight;
-            if (channel_count(src->pixel_format) == 4)
+            if (channel_count(pixel_format) == 4)
                 color4 += sample_4_channels(src->data + src_read_address) * weight;
         }
 
         uint64 scratch_write_address = (y * dst->width + x) * num_channels;
 
-        if (channel_count(src->pixel_format) == 3)
+        if (channel_count(pixel_format) == 3)
             clean_and_write_3_channels(color3, ctx->scratch_space + scratch_write_address);
-        if (channel_count(src->pixel_format) == 4)
+        if (channel_count(pixel_format) == 4)
             clean_and_write_4_channels(color4, ctx->scratch_space + scratch_write_address);
     }
     // Accumulate the scratch space data along the height
-    // Downsamples the src_height X dst->width image to target_height * dst->width
+    // Downsamples the src_height X dst->width image to dst->height * dst->width
     foreach_tiled(y =  0 ... dst->height, x = 0 ... dst->width) {
 
         uint32 src_height_start = vertical_weight_collection->starts[y];
@@ -165,40 +169,38 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
             uint32 scratch_y = src_height_start + i;
             uint64 scratch_read_address = (scratch_y * dst->width + x) * num_channels;
 
-            if (channel_count(src->pixel_format) == 3)
+            if (channel_count(pixel_format) == 3)
                 color3 += sample_3_channels(ctx->scratch_space + scratch_read_address) * weight;
-            if (channel_count(src->pixel_format) == 4)
+            if (channel_count(pixel_format) == 4)
                 color4 += sample_4_channels(ctx->scratch_space + scratch_read_address) * weight;
         }
 
-        uint64 out_write_address = (y * dst->width + x) * num_channels;
-        assert(out_write_address < dst->height * dst->width * num_channels);
-        if (channel_count(src->pixel_format) == 3)
+        uint64 out_write_address = (y * dst->width + x) * dst->pixel_stride;
+        assert(out_write_address < dst->height * dst->width * dst->pixel_stride);
+        if (channel_count(pixel_format) == 3)
             clean_and_write_3_channels(color3, dst->data + out_write_address);
-        if (channel_count(src->pixel_format) == 4)
+        if (channel_count(pixel_format) == 4)
             clean_and_write_4_channels(color4, dst->data + out_write_address);
     }
 }
 
 /// scratch_space must be at least src_height * dst->width pixels big
-export void resample_with_cached_weights_3(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform DownsamplingContext * uniform ctx) {
+export void resample_with_cached_weights_3(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx) {
     const uniform bool is_normal_map = false;
-    assume(channel_count(src->pixel_format) == 3);
-    resample_with_cached_weights(src, dst, ctx);
+    assume(channel_count(pixel_format) == 3);
+    resample_with_cached_weights(src, dst, pixel_format, ctx);
 }
 
 /// scratch_space must be at least src_height * dst->width pixels big
-export void resample_with_cached_weights_4(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform DownsamplingContext * uniform ctx) {
-    const uniform bool is_normal_map = false;
-    assume(channel_count(src->pixel_format) == 4);
-    resample_with_cached_weights(src, dst, ctx);
+export void resample_with_cached_weights_4(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx) {
+    assume(channel_count(pixel_format) == 4);
+    resample_with_cached_weights(src, dst, pixel_format, ctx);
 }
 
 /// scratch_space must be at least src_height * dst->width pixels big
-export void downsample_normal_map(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform NormalMapFormat normal_map_format) {
-    assume(channel_count(src->pixel_format) == 3);
+export void downsample_normal_map(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform NormalMapFormat normal_map_format) {
     float<2> ratio = { (float)src->width / (float)dst->width, (float)src->height / (float)dst->height };
-    int<2> ceiled = { floor(ratio.x), floor(ratio.y) };
+    int<2> floored = { floor(ratio.x), floor(ratio.y) };
     foreach_tiled(y =  0 ... dst->height, x = 0 ... dst->width) {
 
         uint<2> start = { 0, 0 };
@@ -206,11 +208,11 @@ export void downsample_normal_map(uniform SourceImage * uniform src, uniform Dow
         float pixel_weight = 0.0;
 
         {
-            start.x = max((int)x * ratio.x - ceiled.x, 0);
-            start.y = max((int)y * ratio.y - ceiled.y, 0);
+            start.x = max((int)x * ratio.x - floored.x, 0);
+            start.y = max((int)y * ratio.y - floored.y, 0);
 
-            end.x = min((int)x * ratio.x + ceiled.x, src->width);
-            end.y = min((int)y * ratio.y + ceiled.y, src->height);
+            end.x = min((int)x * ratio.x + floored.x, src->width);
+            end.y = min((int)y * ratio.y + floored.y, src->height);
 
             pixel_weight = (float)((end.x - start.x) * (end.y - start.y));
         }
@@ -226,10 +228,12 @@ export void downsample_normal_map(uniform SourceImage * uniform src, uniform Dow
         }
 
         normal /= pixel_weight;
-        normal = normalize(normal);
 
         uint64 out_write_address = (y * dst->width + x) * dst->pixel_stride;
         assert(out_write_address < dst->height * dst->width * dst->pixel_stride);
         clean_and_write_normal(normal, dst->data + out_write_address, normal_map_format);
+
+        uniform uint8* pixel_ptr = (dst->data + out_write_address);
+
     }
 }

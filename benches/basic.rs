@@ -14,13 +14,13 @@ pub fn ispc_downsampler(c: &mut Criterion) {
             Format::Rgb8Unorm
         };
 
-        let src_img = Image::new(&img.data, img.width as u32, img.height as u32, src_fmt);
+        let src_img = Image::new(&img.data, img.width as u32, img.height as u32);
 
         let target_width = (img.width / DOWNSCALE) as u32;
         let target_height = (img.height / DOWNSCALE) as u32;
 
         c.bench_function("Downsample `square_test.png` using ispc_downsampler", |b| {
-            b.iter(|| downsample(&src_img, target_width, target_height, src_fmt.pixel_size()))
+            b.iter(|| downsample(&src_img, target_width, target_height, src_fmt.pixel_size(), src_fmt))
         });
     }
 }
