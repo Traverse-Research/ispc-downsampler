@@ -62,7 +62,7 @@ jobs:
           echo "$PWD" >> $GITHUB_PATH
 
       - name: Install additional targets
-        run: rustup target add aarch64-apple-darwin aarch64-apple-ios
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin aarch64-apple-ios
 
       - name: Build binaries
         run: |
