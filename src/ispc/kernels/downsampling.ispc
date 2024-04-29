@@ -47,8 +47,6 @@ inline float<3> sample_normal(const uniform uint8* varying pixel_ptr, uniform No
         }
     }
 
-    // print("%\n", length(normal));
-
     return normal;
 }
 
@@ -204,19 +202,20 @@ export void resample_with_cached_weights_4(const uniform SourceImage * uniform s
 /// scratch_space must be at least src_height * dst->width pixels big
 export void downsample_normal_map(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform NormalMapFormat normal_map_format) {
     float<2> ratio = { (float)src->width / (float)dst->width, (float)src->height / (float)dst->height };
-    int<2> floored = { floor(ratio.x), floor(ratio.y) };
     foreach_tiled(y =  0 ... dst->height, x = 0 ... dst->width) {
+
+        float<2> pixel_center = { (float)x + 0.5f, (float)y + 0.5f };
 
         uint<2> start = { 0, 0 };
         uint<2> end = { 0, 0 };
         float pixel_weight = 0.0;
 
         {
-            start.x = max((int)x * ratio.x - floored.x, 0);
-            start.y = max((int)y * ratio.y - floored.y, 0);
+            start.x = max((int)floor(x * ratio.x - floor(ratio.x / 2.0f) + 0.5f), 0);
+            start.y = max((int)floor(y * ratio.y - floor(ratio.y / 2.0f) + 0.5f), 0);
 
-            end.x = min((int)x * ratio.x + floored.x, src->width);
-            end.y = min((int)y * ratio.y + floored.y, src->height);
+            end.x = min((int)floor(x * ratio.x + ceil(ratio.x / 2.0f) + 0.5f) + 1, src->width);
+            end.y = min((int)floor(y * ratio.y + ceil(ratio.y / 2.0f) + 0.5f) + 1, src->height);
 
             pixel_weight = (float)((end.x - start.x) * (end.y - start.y));
         }
