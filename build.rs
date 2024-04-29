@@ -23,8 +23,10 @@ fn compile_bindings() {
     };
 
     Config::new()
-        .file("src/ispc/kernels/lanczos3.ispc")
+        .file("src/ispc/kernels/filters/lanczos.ispc")
         .file("src/ispc/kernels/rescale_alpha.ispc")
+        .file("src/ispc/kernels/downsampling.ispc")
+        .file("src/ispc/kernels/weight_dimensions.ispc")
         .opt_level(2)
         .woff()
         .target_isas(target_isas)
@@ -33,8 +35,9 @@ fn compile_bindings() {
             builder()
                 .allowlist_function("resample_with_cached_weights_3")
                 .allowlist_function("resample_with_cached_weights_4")
-                .allowlist_function("calculate_weights")
-                .allowlist_function("calculate_weight_variables")
+                .allowlist_function("downsample_normal_map")
+                .allowlist_function("calculate_weights_lanczos")
+                .allowlist_function("calculate_weight_dimensions")
                 .allowlist_function("scale_to_alpha_coverage"),
         )
         .out_dir("src/ispc")

@@ -54,6 +54,159 @@ fn bindgen_test_layout_WeightDimensions() {
         )
     );
 }
+extern "C" {
+    pub fn calculate_weights_lanczos(
+        image_scale: f32,
+        filter_scale: f32,
+        dimensions: *const WeightDimensions,
+        weights: *mut f32,
+    );
+}
+extern "C" {
+    pub fn scale_to_alpha_coverage(
+        source_width: u32,
+        source_height: u32,
+        source_data: *const u8,
+        downsampled_width: u32,
+        downsampled_height: u32,
+        downsampled_image_data: *mut u8,
+        alpha_cutoff: *const f32,
+    );
+}
+pub const NormalMapFormat_R8g8b8: NormalMapFormat = 0;
+pub const NormalMapFormat_R8g8TangentSpaceReconstructedZ: NormalMapFormat = 1;
+pub type NormalMapFormat = ::std::os::raw::c_uint;
+pub const PixelFormat_Rgba8Unorm: PixelFormat = 0;
+pub const PixelFormat_Rgb8Unorm: PixelFormat = 1;
+pub const PixelFormat_Rgba8Snorm: PixelFormat = 2;
+pub const PixelFormat_Rgb8Snorm: PixelFormat = 3;
+pub type PixelFormat = ::std::os::raw::c_uint;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct SourceImage {
+    pub width: u32,
+    pub height: u32,
+    pub data: *const u8,
+    pub pixel_stride: u32,
+}
+#[test]
+fn bindgen_test_layout_SourceImage() {
+    const UNINIT: ::std::mem::MaybeUninit<SourceImage> = ::std::mem::MaybeUninit::uninit();
+    let ptr = UNINIT.as_ptr();
+    assert_eq!(
+        ::std::mem::size_of::<SourceImage>(),
+        24usize,
+        concat!("Size of: ", stringify!(SourceImage))
+    );
+    assert_eq!(
+        ::std::mem::align_of::<SourceImage>(),
+        8usize,
+        concat!("Alignment of ", stringify!(SourceImage))
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).width) as usize - ptr as usize },
+        0usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(SourceImage),
+            "::",
+            stringify!(width)
+        )
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).height) as usize - ptr as usize },
+        4usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(SourceImage),
+            "::",
+            stringify!(height)
+        )
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).data) as usize - ptr as usize },
+        8usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(SourceImage),
+            "::",
+            stringify!(data)
+        )
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).pixel_stride) as usize - ptr as usize },
+        16usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(SourceImage),
+            "::",
+            stringify!(pixel_stride)
+        )
+    );
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DownsampledImage {
+    pub width: u32,
+    pub height: u32,
+    pub data: *mut u8,
+    pub pixel_stride: u32,
+}
+#[test]
+fn bindgen_test_layout_DownsampledImage() {
+    const UNINIT: ::std::mem::MaybeUninit<DownsampledImage> = ::std::mem::MaybeUninit::uninit();
+    let ptr = UNINIT.as_ptr();
+    assert_eq!(
+        ::std::mem::size_of::<DownsampledImage>(),
+        24usize,
+        concat!("Size of: ", stringify!(DownsampledImage))
+    );
+    assert_eq!(
+        ::std::mem::align_of::<DownsampledImage>(),
+        8usize,
+        concat!("Alignment of ", stringify!(DownsampledImage))
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).width) as usize - ptr as usize },
+        0usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(DownsampledImage),
+            "::",
+            stringify!(width)
+        )
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).height) as usize - ptr as usize },
+        4usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(DownsampledImage),
+            "::",
+            stringify!(height)
+        )
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).data) as usize - ptr as usize },
+        8usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(DownsampledImage),
+            "::",
+            stringify!(data)
+        )
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).pixel_stride) as usize - ptr as usize },
+        16usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(DownsampledImage),
+            "::",
+            stringify!(pixel_stride)
+        )
+    );
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SampleWeights {
@@ -92,6 +245,47 @@ fn bindgen_test_layout_SampleWeights() {
             stringify!(SampleWeights),
             "::",
             stringify!(horizontal_weights)
+        )
+    );
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DownsamplingContext {
+    pub weights: SampleWeights,
+    pub scratch_space: *mut u8,
+}
+#[test]
+fn bindgen_test_layout_DownsamplingContext() {
+    const UNINIT: ::std::mem::MaybeUninit<DownsamplingContext> = ::std::mem::MaybeUninit::uninit();
+    let ptr = UNINIT.as_ptr();
+    assert_eq!(
+        ::std::mem::size_of::<DownsamplingContext>(),
+        24usize,
+        concat!("Size of: ", stringify!(DownsamplingContext))
+    );
+    assert_eq!(
+        ::std::mem::align_of::<DownsamplingContext>(),
+        8usize,
+        concat!("Alignment of ", stringify!(DownsamplingContext))
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).weights) as usize - ptr as usize },
+        0usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(DownsamplingContext),
+            "::",
+            stringify!(weights)
+        )
+    );
+    assert_eq!(
+        unsafe { ::std::ptr::addr_of!((*ptr).scratch_space) as usize - ptr as usize },
+        16usize,
+        concat!(
+            "Offset of field: ",
+            stringify!(DownsamplingContext),
+            "::",
+            stringify!(scratch_space)
         )
     );
 }
@@ -148,54 +342,34 @@ fn bindgen_test_layout_WeightCollection() {
     );
 }
 extern "C" {
-    pub fn calculate_weight_variables(
-        filter_scale: f32,
-        src: u32,
-        target: u32,
-        out_variables: *mut WeightDimensions,
-    );
-}
-extern "C" {
-    pub fn calculate_weights(
-        image_scale: f32,
-        filter_scale: f32,
-        vars: *const WeightDimensions,
-        weights: *mut f32,
+    pub fn downsample_normal_map(
+        src: *const SourceImage,
+        dst: *mut DownsampledImage,
+        normal_map_format: NormalMapFormat,
     );
 }
 extern "C" {
     pub fn resample_with_cached_weights_3(
-        src_width: u32,
-        src_height: u32,
-        target_width: u32,
-        target_height: u32,
-        cached_weights: *const SampleWeights,
-        scratch_space: *mut u8,
-        src_data: *const u8,
-        out_data: *mut u8,
+        src: *const SourceImage,
+        dst: *mut DownsampledImage,
+        pixel_format: PixelFormat,
+        ctx: *mut DownsamplingContext,
     );
 }
 extern "C" {
     pub fn resample_with_cached_weights_4(
-        src_width: u32,
-        src_height: u32,
-        target_width: u32,
-        target_height: u32,
-        cached_weights: *const SampleWeights,
-        scratch_space: *mut u8,
-        src_data: *const u8,
-        out_data: *mut u8,
+        src: *const SourceImage,
+        dst: *mut DownsampledImage,
+        pixel_format: PixelFormat,
+        ctx: *mut DownsamplingContext,
     );
 }
 extern "C" {
-    pub fn scale_to_alpha_coverage(
-        source_width: u32,
-        source_height: u32,
-        source_data: *const u8,
-        downsampled_width: u32,
-        downsampled_height: u32,
-        downsampled_image_data: *mut u8,
-        alpha_cutoff: *const f32,
+    pub fn calculate_weight_dimensions(
+        filter_scale: f32,
+        src: u32,
+        target: u32,
+        out_dimensions: *mut WeightDimensions,
     );
 }
 }
