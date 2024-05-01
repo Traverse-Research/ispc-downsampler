@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
 
@@ -38,9 +38,9 @@ jobs:
           cargo build --features=ispc --target aarch64-unknown-linux-musl
           cargo build --features=ispc --target aarch64-linux-android
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
-          name: ISPC kernels
+          name: ISPC kernels Ubuntu
           path: |
             src/ispc/downsample_ispc.rs
             src/ispc/lib*.a
@@ -49,7 +49,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
 
@@ -62,7 +62,7 @@ jobs:
           echo "$PWD" >> $GITHUB_PATH
 
       - name: Install additional targets
-        run: rustup target add aarch64-apple-darwin aarch64-apple-ios
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin aarch64-apple-ios
 
       - name: Build binaries
         run: |
@@ -70,9 +70,9 @@ jobs:
           cargo build --features=ispc --release --target=aarch64-apple-darwin
           cargo build --features=ispc --release --target=aarch64-apple-ios
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
-          name: ISPC kernels
+          name: ISPC kernels macOS
           path: |
             src/ispc/lib*.a
 
@@ -80,7 +80,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
 
@@ -94,11 +94,16 @@ jobs:
           rm ispc-v$env:ISPC_VERSION-windows.zip
           Resolve-Path "ispc-v$env:ISPC_VERSION-windows/bin" | Add-Content $env:GITHUB_PATH
 
-      - name: Build binaries
-        run: cargo build --features=ispc
+      - name: Install additional targets
+        run: rustup target add aarch64-pc-windows-msvc
 
-      - uses: actions/upload-artifact@v3
+      - name: Build binaries
+        run: |
+          cargo build --features=ispc
+          cargo build --features=ispc --target aarch64-pc-windows-msvc
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: ISPC kernels
+          name: ISPC kernels Windows
           path: |
             src/ispc/*.lib
