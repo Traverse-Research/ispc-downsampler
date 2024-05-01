@@ -27,8 +27,7 @@ ispc_rt = "2"
 image = "0.25.1"
 stb_image = "0.3.0"
 criterion = "0.5"
-resize = "0.7"
-fallible_collections = "0.4.5"
+resize = "0.8"
 
 [[bench]]
 name = "basic"
