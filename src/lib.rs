@@ -4,8 +4,17 @@ use ispc::WeightCollection;
 
 mod ispc;
 
+pub trait ImagePixelFormat {
+    fn num_channel_in_memory(&self) -> usize;
+    fn channel_size_in_bytes(&self) -> usize;
+
+    fn pixel_size(&self) -> usize {
+        self.channel_size_in_bytes() * self.num_channel_in_memory()
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
-pub enum Format {
+pub enum AlbedoFormat {
     Rgb8Unorm,
     Rgb8Snorm,
     Srgb8,
@@ -14,39 +23,35 @@ pub enum Format {
     Srgba8,
 }
 
-impl Format {
-    pub fn num_channels(&self) -> usize {
+impl ImagePixelFormat for AlbedoFormat {
+    fn num_channel_in_memory(&self) -> usize {
         match self {
             Self::Rgb8Unorm | Self::Rgb8Snorm | Self::Srgb8 => 3,
             Self::Rgba8Unorm | Self::Rgba8Snorm | Self::Srgba8 => 4,
         }
     }
 
-    pub fn pixel_size(&self) -> usize {
-        self.channel_size_in_bytes() * self.num_channels()
-    }
-
-    pub fn channel_size_in_bytes(&self) -> usize {
+    fn channel_size_in_bytes(&self) -> usize {
         match self {
-            Format::Rgb8Unorm
-            | Format::Rgb8Snorm
-            | Format::Srgb8
-            | Format::Rgba8Unorm
-            | Format::Rgba8Snorm
-            | Format::Srgba8 => 1,
+            AlbedoFormat::Rgb8Unorm
+            | AlbedoFormat::Rgb8Snorm
+            | AlbedoFormat::Srgb8
+            | AlbedoFormat::Rgba8Unorm
+            | AlbedoFormat::Rgba8Snorm
+            | AlbedoFormat::Srgba8 => 1,
         }
     }
 }
 
-impl From<Format> for ispc::downsample_ispc::PixelFormat {
-    fn from(value: Format) -> Self {
+impl From<AlbedoFormat> for ispc::downsample_ispc::PixelFormat {
+    fn from(value: AlbedoFormat) -> Self {
         match value {
-            Format::Rgb8Unorm => ispc::PixelFormat_Rgb8Unorm,
-            Format::Rgb8Snorm => ispc::PixelFormat_Rgb8Snorm,
-            Format::Srgb8 => ispc::PixelFormat_Rgb8Unorm,
-            Format::Rgba8Unorm => ispc::PixelFormat_Rgba8Unorm,
-            Format::Rgba8Snorm => ispc::PixelFormat_Rgba8Snorm,
-            Format::Srgba8 => ispc::PixelFormat_Rgba8Unorm,
+            AlbedoFormat::Rgb8Unorm => ispc::PixelFormat_Rgb8Unorm,
+            AlbedoFormat::Rgb8Snorm => ispc::PixelFormat_Rgb8Snorm,
+            AlbedoFormat::Srgb8 => ispc::PixelFormat_Rgb8Unorm,
+            AlbedoFormat::Rgba8Unorm => ispc::PixelFormat_Rgba8Unorm,
+            AlbedoFormat::Rgba8Snorm => ispc::PixelFormat_Rgba8Snorm,
+            AlbedoFormat::Srgba8 => ispc::PixelFormat_Rgba8Unorm,
         }
     }
 }
@@ -57,15 +62,15 @@ pub enum NormalMapFormat {
     R8g8TangentSpaceReconstructedZ,
 }
 
-impl NormalMapFormat {
-    pub fn pixel_size(self) -> usize {
+impl ImagePixelFormat for NormalMapFormat {
+    fn num_channel_in_memory(&self) -> usize {
         match self {
             NormalMapFormat::R8g8b8 => 3,
             NormalMapFormat::R8g8TangentSpaceReconstructedZ => 2,
         }
     }
 
-    pub fn channel_size_in_bytes(self) -> usize {
+    fn channel_size_in_bytes(&self) -> usize {
         match self {
             Self::R8g8b8 | Self::R8g8TangentSpaceReconstructedZ => 1,
         }
@@ -85,19 +90,34 @@ impl From<NormalMapFormat> for ispc::NormalMapFormat {
 
 /// Describes a source image which can be used for [`downsample()`]
 /// The pixel data is stored as a slice to avoid unnecessarily cloning it.
-pub struct Image<'a> {
+pub struct Image<'a, F: ImagePixelFormat> {
     pixels: &'a [u8],
     width: u32,
     height: u32,
+    pixel_stride_in_bytes: usize,
+    format: F,
 }
 
-impl<'a> Image<'a> {
+impl<'a, F: ImagePixelFormat> Image<'a, F> {
     /// Creates a new source image from the given pixel data slice, dimensions and format.
-    pub fn new(pixels: &'a [u8], width: u32, height: u32) -> Self {
+    pub fn new(pixels: &'a [u8], width: u32, height: u32, format: F) -> Self {
+        let pixel_size = format.pixel_size();
+        Self::new_with_pixel_stride(pixels, width, height, format, pixel_size)
+    }
+
+    pub fn new_with_pixel_stride(
+        pixels: &'a [u8],
+        width: u32,
+        height: u32,
+        format: F,
+        pixel_stride_in_bytes: usize,
+    ) -> Self {
         Self {
             pixels,
             width,
             height,
+            pixel_stride_in_bytes,
+            format,
         }
     }
 }
@@ -109,13 +129,15 @@ impl<'a> Image<'a> {
 /// a linear sum of the alpha values instead and the source and target alpha coverage
 /// are calculated the same way.
 pub fn scale_alpha_to_original_coverage(
-    src: &Image<'_>,
-    downsampled: &Image<'_>,
+    src: &Image<'_, AlbedoFormat>,
+    downsampled: &Image<'_, AlbedoFormat>,
     alpha_cutoff: Option<f32>,
-    format: Format,
 ) -> Vec<u8> {
     assert!(
-        matches!(format, Format::Rgba8Unorm | Format::Rgba8Snorm),
+        matches!(
+            src.format,
+            AlbedoFormat::Rgba8Unorm | AlbedoFormat::Rgba8Snorm
+        ),
         "Cannot retain alpha coverage on image with no alpha channel"
     );
     let mut alpha_scaled_data = downsampled.pixels.to_vec();
@@ -214,21 +236,8 @@ pub(crate) fn calculate_weights(src: u32, target: u32, filter_scale: f32) -> Vec
 /// Will panic if the target dimensions are the same as the source image's.
 ///
 /// For a more fine-tunable version of this function, see [downsample_with_custom_scale].
-pub fn downsample(
-    src: &Image<'_>,
-    target_width: u32,
-    target_height: u32,
-    pixel_stride_in_bytes: usize,
-    format: Format,
-) -> Vec<u8> {
-    downsample_with_custom_scale(
-        src,
-        target_width,
-        target_height,
-        3.0,
-        pixel_stride_in_bytes,
-        format,
-    )
+pub fn downsample(src: &Image<'_, AlbedoFormat>, target_width: u32, target_height: u32) -> Vec<u8> {
+    downsample_with_custom_scale(src, target_width, target_height, 3.0)
 }
 
 fn precompute_lanczos_weights(
@@ -268,14 +277,12 @@ fn precompute_lanczos_weights(
 /// A scale of 1.0 preserves is good if speed is necessary, but still preserves a decent amount of detail.
 /// Anything below is even faster, although the loss of detail becomes clear.
 pub fn downsample_with_custom_scale(
-    src: &Image<'_>,
+    src: &Image<'_, AlbedoFormat>,
     target_width: u32,
     target_height: u32,
     filter_scale: f32,
-    pixel_stride_in_bytes: usize,
-    format: Format,
 ) -> Vec<u8> {
-    assert!(format.pixel_size() <= pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
+    assert!(src.format.pixel_size() <= src.pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
 
     let sample_weights = precompute_lanczos_weights(
         src.width,
@@ -287,27 +294,30 @@ pub fn downsample_with_custom_scale(
 
     // The new implementation needs a src_height * target_width intermediate buffer.
     let mut scratch_space =
-        vec![0u8; (src.height * target_width * format.num_channels() as u32) as usize];
+        vec![0u8; (src.height * target_width * src.format.num_channel_in_memory() as u32) as usize];
 
-    let mut output =
-        vec![0u8; (target_width * target_height * format.num_channels() as u32) as usize];
+    let mut output = vec![
+        0u8;
+        (target_width * target_height * src.format.num_channel_in_memory() as u32)
+            as usize
+    ];
 
     unsafe {
-        if format.num_channels() == 3 {
+        if src.format.num_channel_in_memory() == 3 {
             ispc::downsample_ispc::resample_with_cached_weights_3(
                 &ispc::SourceImage {
                     width: src.width,
                     height: src.height,
                     data: src.pixels.as_ptr(),
-                    pixel_stride: pixel_stride_in_bytes as u32,
+                    pixel_stride: src.pixel_stride_in_bytes as u32,
                 },
                 &mut ispc::DownsampledImage {
                     width: target_width,
                     height: target_height,
                     data: output.as_mut_ptr(),
-                    pixel_stride: pixel_stride_in_bytes as u32,
+                    pixel_stride: src.pixel_stride_in_bytes as u32,
                 },
-                ispc::PixelFormat::from(format),
+                ispc::PixelFormat::from(src.format),
                 &mut ispc::DownsamplingContext {
                     weights: *sample_weights.ispc_representation(),
                     scratch_space: scratch_space.as_mut_ptr(),
@@ -319,15 +329,15 @@ pub fn downsample_with_custom_scale(
                     width: src.width,
                     height: src.height,
                     data: src.pixels.as_ptr(),
-                    pixel_stride: pixel_stride_in_bytes as u32,
+                    pixel_stride: src.pixel_stride_in_bytes as u32,
                 },
                 &mut ispc::DownsampledImage {
                     width: target_width,
                     height: target_height,
                     data: output.as_mut_ptr(),
-                    pixel_stride: pixel_stride_in_bytes as u32,
+                    pixel_stride: src.pixel_stride_in_bytes as u32,
                 },
-                ispc::PixelFormat::from(format),
+                ispc::PixelFormat::from(src.format),
                 &mut ispc::DownsamplingContext {
                     weights: *sample_weights.ispc_representation(),
                     scratch_space: scratch_space.as_mut_ptr(),
@@ -344,15 +354,13 @@ pub fn downsample_with_custom_scale(
 ///
 /// Returns a `Vec` with the downsampled data. If `normal_map_format.pixel_size() < pixel_stride_in_bytes`, the `Vec` will contain more values than channels than the format has specified, with all pixels in them initialized to 255.
 pub fn downsample_normal_map(
-    src: &Image<'_>,
+    src: &Image<'_, NormalMapFormat>,
     target_width: u32,
     target_height: u32,
-    pixel_stride_in_bytes: usize,
-    normal_map_format: NormalMapFormat,
 ) -> Vec<u8> {
-    assert!(normal_map_format.pixel_size() <= pixel_stride_in_bytes, "The pixel stride in bytes must be more or equal than the size of a single pixel as described by the format of the normal map.");
+    assert!(src.format.pixel_size() <= src.pixel_stride_in_bytes, "The pixel stride in bytes must be more or equal than the size of a single pixel as described by the format of the normal map.");
 
-    let mut data = vec![255u8; (target_width * target_height) as usize * pixel_stride_in_bytes];
+    let mut data = vec![255u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
 
     unsafe {
         ispc::downsample_normal_map(
@@ -360,15 +368,15 @@ pub fn downsample_normal_map(
                 width: src.width,
                 height: src.height,
                 data: src.pixels.as_ptr(),
-                pixel_stride: pixel_stride_in_bytes as u32,
+                pixel_stride: src.pixel_stride_in_bytes as u32,
             },
             &mut ispc::DownsampledImage {
                 width: target_width,
                 height: target_height,
                 data: data.as_mut_ptr(),
-                pixel_stride: pixel_stride_in_bytes as u32,
+                pixel_stride: src.pixel_stride_in_bytes as u32,
             },
-            ispc::NormalMapFormat::from(normal_map_format),
+            ispc::NormalMapFormat::from(src.format),
         );
     }
 
