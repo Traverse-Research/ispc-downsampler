@@ -4,11 +4,18 @@ use ispc::WeightCollection;
 
 mod ispc;
 
-pub trait ImagePixelFormat {
-    fn num_channel_in_memory(&self) -> usize;
-    fn channel_size_in_bytes(&self) -> usize;
+pub trait ImagePixelFormat: Copy {
+    /// Returns the number of channels that an image of this format would have in memory.
+    /// For example, while a normal map of format [`NormalMapFormat::R8g8TangentSpaceReconstructedZ`] would still have 3 channels when sampled,
+    /// in memory it will have 2 channels.
+    fn num_channel_in_memory(self) -> usize;
 
-    fn pixel_size(&self) -> usize {
+    /// Returns the size of a single value channel, in bytes.
+    fn channel_size_in_bytes(self) -> usize;
+
+    /// Returns the size in bytes of a single pixel.
+    /// Generally this will be equal to [channel_size_in_bytes()][`ImagePixelFormat::channel_size_in_bytes()`] * [num_channel_in_memory()][`ImagePixelFormat::num_channel_in_memory()`].
+    fn pixel_size_in_bytes(self) -> usize {
         self.channel_size_in_bytes() * self.num_channel_in_memory()
     }
 }
@@ -24,14 +31,14 @@ pub enum AlbedoFormat {
 }
 
 impl ImagePixelFormat for AlbedoFormat {
-    fn num_channel_in_memory(&self) -> usize {
+    fn num_channel_in_memory(self) -> usize {
         match self {
             Self::Rgb8Unorm | Self::Rgb8Snorm | Self::Srgb8 => 3,
             Self::Rgba8Unorm | Self::Rgba8Snorm | Self::Srgba8 => 4,
         }
     }
 
-    fn channel_size_in_bytes(&self) -> usize {
+    fn channel_size_in_bytes(self) -> usize {
         match self {
             AlbedoFormat::Rgb8Unorm
             | AlbedoFormat::Rgb8Snorm
@@ -58,21 +65,21 @@ impl From<AlbedoFormat> for ispc::downsample_ispc::PixelFormat {
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum NormalMapFormat {
-    R8g8b8,
-    R8g8TangentSpaceReconstructedZ,
+    Rgb8,
+    Rg8TangentSpaceReconstructedZ,
 }
 
 impl ImagePixelFormat for NormalMapFormat {
-    fn num_channel_in_memory(&self) -> usize {
+    fn num_channel_in_memory(self) -> usize {
         match self {
-            NormalMapFormat::R8g8b8 => 3,
-            NormalMapFormat::R8g8TangentSpaceReconstructedZ => 2,
+            NormalMapFormat::Rgb8 => 3,
+            NormalMapFormat::Rg8TangentSpaceReconstructedZ => 2,
         }
     }
 
-    fn channel_size_in_bytes(&self) -> usize {
+    fn channel_size_in_bytes(self) -> usize {
         match self {
-            Self::R8g8b8 | Self::R8g8TangentSpaceReconstructedZ => 1,
+            Self::Rgb8 | Self::Rg8TangentSpaceReconstructedZ => 1,
         }
     }
 }
@@ -80,8 +87,8 @@ impl ImagePixelFormat for NormalMapFormat {
 impl From<NormalMapFormat> for ispc::NormalMapFormat {
     fn from(value: NormalMapFormat) -> ispc::NormalMapFormat {
         match value {
-            NormalMapFormat::R8g8b8 => ispc::NormalMapFormat_R8g8b8,
-            NormalMapFormat::R8g8TangentSpaceReconstructedZ => {
+            NormalMapFormat::Rgb8 => ispc::NormalMapFormat_R8g8b8,
+            NormalMapFormat::Rg8TangentSpaceReconstructedZ => {
                 ispc::NormalMapFormat_R8g8TangentSpaceReconstructedZ
             }
         }
@@ -101,7 +108,7 @@ pub struct Image<'a, F: ImagePixelFormat> {
 impl<'a, F: ImagePixelFormat> Image<'a, F> {
     /// Creates a new source image from the given pixel data slice, dimensions and format.
     pub fn new(pixels: &'a [u8], width: u32, height: u32, format: F) -> Self {
-        let pixel_size = format.pixel_size();
+        let pixel_size = format.pixel_size_in_bytes();
         Self::new_with_pixel_stride(pixels, width, height, format, pixel_size)
     }
 
@@ -282,7 +289,7 @@ pub fn downsample_with_custom_scale(
     target_height: u32,
     filter_scale: f32,
 ) -> Vec<u8> {
-    assert!(src.format.pixel_size() <= src.pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
+    assert!(src.format.pixel_size_in_bytes() <= src.pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
 
     let sample_weights = precompute_lanczos_weights(
         src.width,
@@ -358,7 +365,7 @@ pub fn downsample_normal_map(
     target_width: u32,
     target_height: u32,
 ) -> Vec<u8> {
-    assert!(src.format.pixel_size() <= src.pixel_stride_in_bytes, "The pixel stride in bytes must be more or equal than the size of a single pixel as described by the format of the normal map.");
+    assert!(src.format.pixel_size_in_bytes() <= src.pixel_stride_in_bytes, "The pixel stride in bytes must be more or equal than the size of a single pixel as described by the format of the normal map.");
 
     let mut data = vec![255u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
 
