@@ -14,7 +14,7 @@ pub trait ImagePixelFormat: Copy {
     fn channel_size_in_bytes(self) -> usize;
 
     /// Returns the size in bytes of a single pixel.
-    /// Generally this will be equal to [channel_size_in_bytes()][`ImagePixelFormat::channel_size_in_bytes()`] * [num_channel_in_memory()][`ImagePixelFormat::num_channel_in_memory()`].
+    /// Generally this will be equal to [`channel_size_in_bytes()`][Self::channel_size_in_bytes()] * [`num_channel_in_memory()`][Self::num_channel_in_memory()].
     fn pixel_size_in_bytes(self) -> usize {
         self.channel_size_in_bytes() * self.num_channel_in_memory()
     }
