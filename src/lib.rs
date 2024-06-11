@@ -6,7 +6,7 @@ mod ispc;
 
 pub trait ImagePixelFormat: Copy {
     /// Returns the number of channels that an image of this format would have in memory.
-    /// For example, while a normal map of format [`NormalMapFormat::R8g8TangentSpaceReconstructedZ`] would still have 3 channels when sampled,
+    /// For example, while a normal map of format [`NormalMapFormat::Rg8TangentSpaceReconstructedZ`] would still have 3 channels when sampled,
     /// in memory it will have 2 channels.
     fn num_channel_in_memory(self) -> usize;
 
