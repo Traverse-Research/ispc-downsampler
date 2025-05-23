@@ -27,6 +27,8 @@ ispc_rt = "2"
 image = "0.25.1"
 stb_image = "0.3.0"
 criterion = "0.5"
+
+# Make sure we do an apples to apples, single threaded, comparison in the benchmark
 resize = { version = "0.8", default-features = false, features = ["std"] }
 
 [[bench]]
