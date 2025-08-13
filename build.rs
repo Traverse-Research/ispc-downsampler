@@ -19,7 +19,7 @@ fn compile_bindings() {
             // TargetISA::Neoni32x4,
             TargetISA::Neoni32x8,
         ],
-        x => panic!("Unsupported target architecture {}", x),
+        x => panic!("Unsupported target architecture {x}"),
     };
 
     Config::new()
