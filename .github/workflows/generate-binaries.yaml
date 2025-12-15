@@ -38,7 +38,7 @@ jobs:
           cargo build --features=ispc --target aarch64-unknown-linux-musl
           cargo build --features=ispc --target aarch64-linux-android
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ISPC kernels Ubuntu
           path: |
@@ -70,7 +70,7 @@ jobs:
           cargo build --features=ispc --target=aarch64-apple-darwin
           cargo build --features=ispc --target=aarch64-apple-ios
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ISPC kernels macOS
           path: |
@@ -102,7 +102,7 @@ jobs:
           cargo build --features=ispc
           cargo build --features=ispc --target aarch64-pc-windows-msvc
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ISPC kernels Windows
           path: |
