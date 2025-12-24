@@ -12,14 +12,13 @@ fn compile_bindings() {
             TargetISA::SSE4i32x4,
             TargetISA::AVX1i32x8,
             TargetISA::AVX2i32x8,
-            TargetISA::AVX512KNLi32x16,
-            TargetISA::AVX512SKXi32x16,
+            TargetISA::AVX512SKXx16,
         ],
         "arm" | "aarch64" => vec![
             // TargetISA::Neoni32x4,
             TargetISA::Neoni32x8,
         ],
-        x => panic!("Unsupported target architecture {}", x),
+        x => panic!("Unsupported target architecture {x}"),
     };
 
     Config::new()
