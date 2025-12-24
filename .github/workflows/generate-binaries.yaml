@@ -40,7 +40,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: ISPC kernels Ubuntu
+          name: ISPC kernels Linux
           path: |
             src/ispc/downsample_ispc.rs
             src/ispc/lib*.a
@@ -72,7 +72,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: ISPC kernels macOS
+          name: ISPC kernels Apple
           path: |
             src/ispc/lib*.a
 
@@ -84,7 +84,7 @@ jobs:
         with:
           submodules: true
 
-      - name: Clean old artifacts before upload globbing
+      - name: Clean old artifacts
         run: Remove-Item src/ispc/*.lib
 
       - name: Prepare Environment
