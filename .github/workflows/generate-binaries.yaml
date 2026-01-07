@@ -3,7 +3,7 @@ name: Generate binaries
 on: [workflow_dispatch]
 
 env:
-  ISPC_VERSION: 1.20.0
+  ISPC_VERSION: 1.29.1
 
 jobs:
   build-linux:
@@ -40,7 +40,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: ISPC kernels Ubuntu
+          name: ISPC kernels Linux
           path: |
             src/ispc/downsample_ispc.rs
             src/ispc/lib*.a
@@ -72,7 +72,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: ISPC kernels macOS
+          name: ISPC kernels Apple
           path: |
             src/ispc/lib*.a
 
@@ -84,7 +84,7 @@ jobs:
         with:
           submodules: true
 
-      - name: Clean old artifacts before upload globbing
+      - name: Clean old artifacts
         run: Remove-Item src/ispc/*.lib
 
       - name: Prepare Environment
@@ -107,3 +107,16 @@ jobs:
           name: ISPC kernels Windows
           path: |
             src/ispc/*.lib
+
+  merge:
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-macos
+      - build-windows
+    steps:
+      - name: Merge Artifacts
+        uses: actions/upload-artifact/merge@v4
+        with:
+          name: ISPC kernels for ispc-downsampler
+          delete-merged: true
