@@ -114,6 +114,13 @@ inline uniform uint32 union_weights_4_rows(uniform const WeightCollection* unifo
     sum2 += w[2] * (x);        \
     sum3 += w[3] * (x);
 
+// Channel of element `j + step` given the channel of element `j`. A per-lane `%` by a runtime value would be a
+// scalar division for every lane, so the loops advance the channel instead.
+inline int advance_channel(int channel, uniform int step, uniform int channels) {
+    int next = channel + step % channels;
+    return next >= channels ? next - channels : next;
+}
+
 // Loads element j of a source row. sRGB rgb is decoded to linear once per load, which is cheaper than a table.
 inline float load_flat(uniform SourceKind kind, const uniform SourceImage* uniform src, uniform uint32 row, uniform uint32 elements,
     int j, bool is_alpha) {
@@ -146,9 +153,18 @@ inline void decode_row(uniform SourceKind kind, const uniform SourceImage* unifo
     const uniform uint8* uniform row = src->data + (uint64)y * src->width * channels;
     if (kind == SOURCE_FLAT_SRGB8 || kind == SOURCE_ALPHA_WEIGHTED_SRGB8) {
         // Linear rgba; alpha weighting premultiplies when summing, which is cheap compared to decoding.
-        foreach (j = 0 ... src->width * channels) {
-            float value = row[j] * (1.0f / 255.0f);
-            out[j] = j % channels >= 3 ? value : srgb_to_linear(value);
+        uniform uint32 elements = src->width * channels;
+        int channel = programIndex % channels;
+        // Full vectors unmasked, then the tail.
+        uniform uint32 j0 = 0;
+        for (; j0 + programCount <= elements; j0 += programCount) {
+            float value = row[j0 + programIndex] * (1.0f / 255.0f);
+            out[j0 + programIndex] = channel >= 3 ? value : srgb_to_linear(value);
+            channel = advance_channel(channel, programCount, channels);
+        }
+        if (j0 + programIndex < elements) {
+            float value = row[j0 + programIndex] * (1.0f / 255.0f);
+            out[j0 + programIndex] = channel >= 3 ? value : srgb_to_linear(value);
         }
     } else if (kind == SOURCE_ALPHA_WEIGHTED_U8 || kind == SOURCE_ALPHA_WEIGHTED_SRGB8) {
         // Lanes over rgba elements, 4 per pixel. Every pixel becomes 8 planes: premultiplied rgb and alpha, then
@@ -281,9 +297,11 @@ inline void vertical_pass(uniform const SourceImage* uniform src, uniform const 
             // Every element is its own plane. Two vectors per iteration for 8 independent sums.
             uniform uint32 elements = src->width * channels;
             uniform uint32 j0 = 0;
+            int channel = programIndex % channels;
             for (; j0 + 2 * programCount <= elements; j0 += 2 * programCount) {
                 int j = j0 + programIndex;
-                bool alpha_x = j % channels >= 3, alpha_z = (j + programCount) % channels >= 3;
+                bool alpha_x = channel >= 3, alpha_z = advance_channel(channel, programCount, channels) >= 3;
+                channel = advance_channel(channel, 2 * programCount, channels);
                 float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f, c0 = 0.0f, c1 = 0.0f, c2 = 0.0f, c3 = 0.0f;
                 for (uniform uint32 r = 0; r < union_rows; r++) {
                     float x = load_flat(kind, src, first + r, elements, j, alpha_x);
@@ -297,8 +315,9 @@ inline void vertical_pass(uniform const SourceImage* uniform src, uniform const 
             }
             for (; j0 < elements; j0 += programCount) {
                 int j = j0 + programIndex;
+                bool alpha_x = channel >= 3;
+                channel = advance_channel(channel, programCount, channels);
                 if (j < elements) {
-                    bool alpha_x = j % channels >= 3;
                     float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
                     for (uniform uint32 r = 0; r < union_rows; r++) {
                         float x = load_flat(kind, src, first + r, elements, j, alpha_x);
