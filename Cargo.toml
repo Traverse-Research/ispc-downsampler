@@ -35,5 +35,9 @@ resize = { version = "0.8", default-features = false, features = ["std"] }
 name = "basic"
 harness = false
 
+[[bench]]
+name = "features"
+harness = false
+
 [features]
 ispc = ["ispc_compile"]
