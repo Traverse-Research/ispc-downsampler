@@ -365,6 +365,14 @@ extern "C" {
     );
 }
 extern "C" {
+    pub fn resample_with_cached_weights_4_alpha_weighted(
+        src: *const SourceImage,
+        dst: *mut DownsampledImage,
+        pixel_format: PixelFormat,
+        ctx: *mut DownsamplingContext,
+    );
+}
+extern "C" {
     pub fn calculate_weight_dimensions(
         filter_scale: f32,
         src: u32,
