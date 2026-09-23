@@ -1,6 +1,6 @@
 #include "weights.ispc"
 export void calculate_weight_dimensions(uniform float filter_scale, uniform uint32 src, uniform uint32 target, uniform WeightDimensions out_dimensions[]) {
-    uniform float ratio = src / target;
+    uniform float ratio = (float)src / (float)target;
 
     uniform float filter_radius = ceil(ratio * filter_scale);
 
