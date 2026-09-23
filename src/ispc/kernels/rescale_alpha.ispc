@@ -4,253 +4,220 @@
 // texels is sampled at 4x4 bilinear subsamples. With a cutoff, coverage is the fraction of subsamples whose alpha
 // is above it; without one it is the mean alpha. Images that are 1 texel wide or high sample the texels directly.
 //
-// The scale that makes the downsampled image match the source's coverage is solved directly rather than searched:
-// - without a cutoff, coverage is piecewise linear in the scale, so it is solved exactly from an alpha histogram;
-// - with a cutoff, every subsample becomes visible above its own threshold scale, so the answer is a quantile of
-//   those thresholds, read from a fine log-scale histogram.
+// Coverage only grows with the scale, so the scale that makes the downsampled image match the source is found by
+// bisection. Every step is one vectorized pass over the downsampled image, which is cheaper than building a
+// histogram with per-lane scatters.
 
 // The logic for this kernel only supports 4-channel textures
-const uniform uint32 NUM_CHANNELS = 4;
 const uniform int SUBSAMPLES = 4;
-const uniform float INFINITY = 1.0f / 0.0f;
-
-// Threshold histogram: scales in [2^-MAX_OCTAVE, 2^MAX_OCTAVE], BINS_PER_OCTAVE bins each (~0.07% apart),
-// plus one bin below and one above (which also holds "never visible").
-const uniform int MAX_OCTAVE = 8;
-const uniform int BINS_PER_OCTAVE = 1024;
-const uniform int THRESHOLD_BINS = 2 * MAX_OCTAVE * BINS_PER_OCTAVE + 2;
-
-inline uint8 alpha_u8(uniform Image image, int x, int y) {
-    return image.data[((uint64)y * image.size.x + x) * NUM_CHANNELS + 3];
-}
-
-inline float alpha(uniform Image image, int x, int y) {
-    return alpha_u8(image, x, y) / 255.0f;
-}
+const uniform float MIN_SCALE = 1.0f / 256.0f;
+const uniform float MAX_SCALE = 256.0f;
 
 inline uniform bool is_1d(uniform Image image) {
     return image.size.x == 1 || image.size.y == 1;
 }
+
+inline const uniform uint32* uniform pixel_row(uniform Image image, uniform int y) {
+    return (const uniform uint32*)image.data + (uint64)y * image.size.x;
+}
+
+// Scaled and clamped alpha of a packed rgba pixel.
+inline float scaled_alpha(uint32 pixel, uniform float scale) {
+    return min((float)(int32)(pixel >> 24) * (scale / 255.0f), 1.0f);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// With a cutoff
 
 inline uniform uint64 num_samples(uniform Image image) {
     return is_1d(image) ? (uint64)image.size.x * image.size.y
                         : (uint64)(image.size.x - 1) * (image.size.y - 1) * SUBSAMPLES * SUBSAMPLES;
 }
 
-inline uniform float subsample_offset(uniform int i) {
-    return ((uniform float)i + 0.5f) / (uniform float)SUBSAMPLES;
+// Visible subsamples in the row of a quad at `fy`. Along the row the bilinear alpha is linear in x.
+inline uint32 visible_in_row(float a00, float a10, float a01, float a11, uniform float fy, uniform float cutoff) {
+    float left = a00 + (a01 - a00) * fy;
+    float slope = a10 + (a11 - a10) * fy - left;
+    uint32 v0 = left + slope * 0.125f > cutoff ? 1 : 0;
+    uint32 v1 = left + slope * 0.375f > cutoff ? 1 : 0;
+    uint32 v2 = left + slope * 0.625f > cutoff ? 1 : 0;
+    uint32 v3 = left + slope * 0.875f > cutoff ? 1 : 0;
+    return (v0 + v1) + (v2 + v3);
+}
+
+// Number of subsamples with scaled alpha above the cutoff. Along a row of subsamples the bilinear alpha is linear
+// in x, so every subsample is a single multiply-add from the row's left edge.
+uniform uint64 count_visible(uniform Image image, uniform float scale, uniform float cutoff) {
+    uniform uint64 visible = 0;
+    if (is_1d(image)) {
+        const uniform uint32* uniform pixels = (const uniform uint32*)image.data;
+        uint32 lane_visible = 0;
+        foreach (i = 0 ... image.size.x * image.size.y) {
+            lane_visible += scaled_alpha(pixels[i], scale) > cutoff ? 1 : 0;
+        }
+        return reduce_add(lane_visible);
+    }
+    for (uniform int y = 0; y < image.size.y - 1; y++) {
+        const uniform uint32* uniform top = pixel_row(image, y);
+        const uniform uint32* uniform bottom = pixel_row(image, y + 1);
+        // One count per subsample row, and the 4 compares of a row summed as a tree: a single running count would
+        // make all 16 additions per quad wait on each other.
+        uint32 visible0 = 0, visible1 = 0, visible2 = 0, visible3 = 0;
+        foreach (x = 0 ... image.size.x - 1) {
+            float a00 = scaled_alpha(top[x], scale);
+            float a10 = scaled_alpha(top[x + 1], scale);
+            float a01 = scaled_alpha(bottom[x], scale);
+            float a11 = scaled_alpha(bottom[x + 1], scale);
+            // Bilinear values lie between the corners, so quads entirely above or at/below the cutoff are all or
+            // nothing. Cut-out textures are mostly such quads; only evaluate subsamples where there is an edge.
+            float lowest = min(min(a00, a10), min(a01, a11));
+            float highest = max(max(a00, a10), max(a01, a11));
+            if (all(lowest > cutoff || highest <= cutoff)) {
+                visible0 += lowest > cutoff ? SUBSAMPLES * SUBSAMPLES : 0;
+                continue;
+            }
+            visible0 += visible_in_row(a00, a10, a01, a11, 0.125f, cutoff);
+            visible1 += visible_in_row(a00, a10, a01, a11, 0.375f, cutoff);
+            visible2 += visible_in_row(a00, a10, a01, a11, 0.625f, cutoff);
+            visible3 += visible_in_row(a00, a10, a01, a11, 0.875f, cutoff);
+        }
+        visible += reduce_add((visible0 + visible1) + (visible2 + visible3));
+    }
+    return visible;
+}
+
+// The scale whose visible count is closest to `target`, to within ~0.1%, preferring the scale closest to 1.
+uniform float solve_scale_with_cutoff(uniform Image image, uniform float cutoff, uniform uint64 target) {
+    uniform uint64 at_one = count_visible(image, 1.0f, cutoff);
+    if (at_one == target)
+        return 1.0f;
+
+    // Bracket the target between two scales an octave apart, starting from 1, then bisect in the log domain.
+    uniform float lo, hi;
+    uniform uint64 lo_count, hi_count;
+    if (at_one < target) {
+        lo = 1.0f, lo_count = at_one;
+        hi = 2.0f, hi_count = count_visible(image, hi, cutoff);
+        while (hi_count < target && hi < MAX_SCALE) {
+            lo = hi, lo_count = hi_count;
+            hi *= 2.0f, hi_count = count_visible(image, hi, cutoff);
+        }
+        if (hi_count < target)
+            return hi;
+    } else {
+        hi = 1.0f, hi_count = at_one;
+        lo = 0.5f, lo_count = count_visible(image, lo, cutoff);
+        while (lo_count > target && lo > MIN_SCALE) {
+            hi = lo, hi_count = lo_count;
+            lo *= 0.5f, lo_count = count_visible(image, lo, cutoff);
+        }
+        if (lo_count > target)
+            return lo;
+    }
+    // Narrow the bracket to ~0.1%. The count is close to linear in log(scale) locally, so interpolate for the next
+    // guess, but keep it away from the ends of the bracket and fall back to bisection when the bracket does not
+    // shrink fast enough, so every step makes progress even where the count is flat or jumps.
+    uniform float previous_width = log(hi / lo);
+    for (uniform int i = 0; i < 32 && hi > lo * 1.001f; i++) {
+        uniform float width = log(hi / lo);
+        uniform float t = 0.5f;
+        if (width < 0.5f * previous_width || i == 0) {
+            uniform float span = (uniform float)((double)hi_count - (double)lo_count);
+            if (span > 0.0f)
+                t = clamp((uniform float)((double)target - (double)lo_count) / span, 0.1f, 0.9f);
+        }
+        previous_width = width;
+        uniform float mid = lo * exp(t * width);
+        uniform uint64 mid_count = count_visible(image, mid, cutoff);
+        if (mid_count < target || (at_one > target && mid_count == target)) {
+            // Below the target, or on it but further from 1 than needed: keep the part towards 1.
+            lo = mid, lo_count = mid_count;
+        } else {
+            hi = mid, hi_count = mid_count;
+        }
+    }
+    uniform uint64 lo_error = lo_count > target ? lo_count - target : target - lo_count;
+    uniform uint64 hi_error = hi_count > target ? hi_count - target : target - hi_count;
+    // On a tie take the side closer to 1.
+    if (lo_error == hi_error)
+        return at_one < target ? lo : hi;
+    return lo_error < hi_error ? lo : hi;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 // Without a cutoff
 
-// Each texel's share of all subsample weight. Summed over a quad's 4x4 subsamples, every corner gets a quarter of
-// the quad, so interior texels get 1, edges 1/2 and corners 1/4 (in units of whole quads).
-inline float texel_weight(uniform Image image, int x, int y) {
-    if (is_1d(image))
-        return 1.0f;
-    float wx = (x == 0 || x == image.size.x - 1) ? 0.5f : 1.0f;
-    float wy = (y == 0 || y == image.size.y - 1) ? 0.5f : 1.0f;
-    return wx * wy;
-}
-
-// Histogram of alpha values weighted by `texel_weight()`, normalized so that coverage(scale) is
-// sum(histogram[a] * min(a * scale / 255, 1)).
-void weighted_alpha_histogram(uniform Image image, uniform float histogram[256]) {
-    // One histogram per program instance, so lanes never write the same bin.
-    uniform float lane_histograms[256 * programCount];
-    foreach (i = 0 ... 256 * programCount) {
-        lane_histograms[i] = 0.0f;
-    }
-    foreach (y = 0 ... image.size.y, x = 0 ... image.size.x) {
-        lane_histograms[alpha_u8(image, x, y) * programCount + programIndex] += texel_weight(image, x, y);
-    }
-    uniform float normalization = 1.0f / (is_1d(image) ? (uniform float)image.size.x * image.size.y
-                                                       : (uniform float)(image.size.x - 1) * (image.size.y - 1));
-    foreach (a = 0 ... 256) {
-        float sum = 0.0f;
-        for (uniform int lane = 0; lane < programCount; lane++) {
-            sum += lane_histograms[a * programCount + lane];
+// Mean scaled alpha, and its derivative with respect to the scale. Summed over a quad's 4x4 subsamples every
+// corner gets a quarter of the quad, and bilinear interpolation is linear, so this is a weighted mean of the texels:
+// 1 inside, 1/2 on edges, 1/4 in corners. The derivative counts the texels that are not clamped yet.
+uniform double mean_alpha(uniform Image image, uniform float scale, uniform double& slope) {
+    uniform double total = 0.0, total_slope = 0.0;
+    uniform bool one_d = is_1d(image);
+    for (uniform int y = 0; y < image.size.y; y++) {
+        const uniform uint32* uniform row = pixel_row(image, y);
+        // Interior texels have weight 1: sum them two vectors at a time for independent sums, and add the edge
+        // texels (weight 1/2) separately.
+        float sum0 = 0.0f, sum1 = 0.0f, slope0 = 0.0f, slope1 = 0.0f;
+        uniform int x_begin = one_d ? 0 : 1;
+        uniform int x_end = one_d ? image.size.x : image.size.x - 1;
+        uniform int x = x_begin;
+        for (; x + 2 * programCount <= x_end; x += 2 * programCount) {
+            float a0 = (float)(int32)(row[x + programIndex] >> 24) * (1.0f / 255.0f);
+            float a1 = (float)(int32)(row[x + programCount + programIndex] >> 24) * (1.0f / 255.0f);
+            sum0 += min(a0 * scale, 1.0f);
+            sum1 += min(a1 * scale, 1.0f);
+            slope0 += a0 * scale < 1.0f ? a0 : 0.0f;
+            slope1 += a1 * scale < 1.0f ? a1 : 0.0f;
         }
-        histogram[a] = sum * normalization;
-    }
-}
-
-uniform float linear_coverage(uniform float histogram[256]) {
-    uniform float coverage = 0.0f;
-    for (uniform int a = 0; a < 256; a++) {
-        coverage += histogram[a] * a / 255.0f;
-    }
-    return coverage;
-}
-
-// Solves sum(histogram[a] * min(a * scale / 255, 1)) = coverage for scale. Alpha values clamp to 1 from the
-// largest down as the scale grows, so walk those breakpoints: between them coverage is clamped + scale * linear.
-uniform float solve_linear_scale(uniform float histogram[256], uniform float coverage) {
-    uniform float clamped = 0.0f;
-    uniform float linear = 0.0f;
-    for (uniform int a = 1; a < 256; a++) {
-        linear += histogram[a] * a / 255.0f;
-    }
-    for (uniform int a = 255; a >= 1; a--) {
-        // Scales up to 255 / a keep alpha a (and everything below it) unclamped.
-        uniform float max_scale = 255.0f / a;
-        if (linear > 0.0f) {
-            uniform float scale = (coverage - clamped) / linear;
-            if (scale <= max_scale)
-                return max(scale, 0.0f);
+        foreach (i = x ... x_end) {
+            float a0 = (float)(int32)(row[i] >> 24) * (1.0f / 255.0f);
+            sum0 += min(a0 * scale, 1.0f);
+            slope0 += a0 * scale < 1.0f ? a0 : 0.0f;
         }
-        clamped += histogram[a];
-        linear -= histogram[a] * a / 255.0f;
-    }
-    // Even with every non-zero alpha clamped to 1 the coverage is not reached.
-    return 255.0f;
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// With a cutoff
-
-// The smallest scale at which sum(w[i] * min(a[i] * scale, 1)) reaches `cutoff`; the subsample is visible above it.
-// Assumes 0 <= cutoff < 1. Start without clamping, which underestimates the scale, then clamp the corners that
-// exceed 1 at that scale and solve again; each round clamps at least one more corner.
-inline float visibility_threshold(float<4> a, uniform float<4> w, uniform float cutoff) {
-    float clamped = 0.0f;
-    float linear = a[0] * w[0] + a[1] * w[1] + a[2] * w[2] + a[3] * w[3];
-    if (linear <= 0.0f)
-        return INFINITY;
-    float scale = cutoff / linear;
-    bool is_clamped[4] = { false, false, false, false };
-    for (uniform int round = 0; round < 4; round++) {
-        bool changed = false;
-        for (uniform int i = 0; i < 4; i++) {
-            if (!is_clamped[i] && a[i] * scale > 1.0f) {
-                is_clamped[i] = true;
-                clamped += w[i];
-                linear -= a[i] * w[i];
-                changed = true;
+        uniform float row_sum = reduce_add(sum0 + sum1), row_slope = reduce_add(slope0 + slope1);
+        if (!one_d) {
+            uniform float edges[2] = { (uniform float)(int32)(row[0] >> 24) * (1.0f / 255.0f),
+                (uniform float)(int32)(row[image.size.x - 1] >> 24) * (1.0f / 255.0f) };
+            for (uniform int e = 0; e < 2; e++) {
+                row_sum += 0.5f * min(edges[e] * scale, 1.0f);
+                row_slope += edges[e] * scale < 1.0f ? 0.5f * edges[e] : 0.0f;
             }
         }
-        // Reaching the cutoff with clamped corners alone is only possible with equality at the previous scale,
-        // which is then the answer.
-        if (!changed || clamped >= cutoff)
+        uniform float row_weight = one_d || (y != 0 && y != image.size.y - 1) ? 1.0f : 0.5f;
+        total += row_weight * row_sum;
+        total_slope += row_weight * row_slope;
+    }
+    uniform double samples = one_d ? (double)image.size.x * image.size.y : (double)(image.size.x - 1) * (image.size.y - 1);
+    slope = total_slope / samples;
+    return total / samples;
+}
+
+// The scale whose mean alpha matches `target`. The mean is piecewise linear, increasing and concave in the scale,
+// so Newton's method converges in a few passes: from below it never overshoots, and from above one step lands
+// below. Being piecewise linear it is exact once it reaches the right piece.
+uniform float solve_scale_linear(uniform Image image, uniform double target) {
+    uniform float scale = 1.0f;
+    for (uniform int i = 0; i < 32; i++) {
+        uniform double slope;
+        uniform double mean = mean_alpha(image, scale, slope);
+        if (mean == target || slope <= 0.0)
             break;
-        if (linear <= 1e-12f)
-            return INFINITY;
-        scale = max((cutoff - clamped) / linear, scale);
+        uniform float next = clamp((uniform float)(scale + (target - mean) / slope), 0.0f, MAX_SCALE);
+        if (abs(next - scale) <= 1e-6f * scale)
+            return next;
+        scale = next;
     }
     return scale;
-}
-
-// 2^-MAX_OCTAVE and 2^MAX_OCTAVE.
-const uniform float MIN_THRESHOLD = 1.0f / 256.0f;
-const uniform float MAX_THRESHOLD = 256.0f;
-const uniform float LN_2 = 0.693147180559945f;
-
-inline int threshold_bin(float threshold) {
-    if (threshold < MIN_THRESHOLD)
-        return 0;
-    if (threshold >= MAX_THRESHOLD)
-        return THRESHOLD_BINS - 1;
-    int bin = 1 + (int)((log(threshold) / LN_2 + MAX_OCTAVE) * BINS_PER_OCTAVE);
-    return min(bin, (int)(THRESHOLD_BINS - 2));
-}
-
-inline uniform float threshold_bin_start(uniform int bin) {
-    if (bin == 0)
-        return 0.0f;
-    return exp(((uniform float)(bin - 1) / BINS_PER_OCTAVE - MAX_OCTAVE) * LN_2);
-}
-
-// Counts the subsamples of `image` per threshold bin.
-void threshold_histogram(uniform Image image, uniform float cutoff, uniform uint32 histogram[]) {
-    // One histogram per program instance, so lanes never write the same bin.
-    uniform uint32* uniform lane_histograms = uniform new uniform uint32[THRESHOLD_BINS * programCount];
-    foreach (i = 0 ... THRESHOLD_BINS * programCount) {
-        lane_histograms[i] = 0;
-    }
-
-    if (is_1d(image)) {
-        foreach (y = 0 ... image.size.y, x = 0 ... image.size.x) {
-            float a = alpha(image, x, y);
-            float threshold = a > 0.0f ? cutoff / a : INFINITY;
-            lane_histograms[threshold_bin(threshold) * programCount + programIndex] += 1;
-        }
-    } else {
-        foreach (y = 0 ... image.size.y - 1, x = 0 ... image.size.x - 1) {
-            float<4> a = { alpha(image, x, y), alpha(image, x + 1, y), alpha(image, x, y + 1), alpha(image, x + 1, y + 1) };
-            for (uniform int sy = 0; sy < SUBSAMPLES; sy++) {
-                uniform float fy = subsample_offset(sy);
-                for (uniform int sx = 0; sx < SUBSAMPLES; sx++) {
-                    uniform float fx = subsample_offset(sx);
-                    uniform float<4> w = { (1.0f - fx) * (1.0f - fy), fx * (1.0f - fy), (1.0f - fx) * fy, fx * fy };
-                    lane_histograms[threshold_bin(visibility_threshold(a, w, cutoff)) * programCount + programIndex] += 1;
-                }
-            }
-        }
-    }
-
-    foreach (bin = 0 ... THRESHOLD_BINS) {
-        uint32 sum = 0;
-        for (uniform int lane = 0; lane < programCount; lane++) {
-            sum += lane_histograms[bin * programCount + lane];
-        }
-        histogram[bin] = sum;
-    }
-    delete[] lane_histograms;
-}
-
-// Number of subsamples above the cutoff at scale 1. No clamping is needed since alpha is at most 1.
-uniform uint64 count_visible(uniform Image image, uniform float cutoff) {
-    uint64 visible = 0;
-    if (is_1d(image)) {
-        foreach (y = 0 ... image.size.y, x = 0 ... image.size.x) {
-            visible += alpha(image, x, y) > cutoff ? 1 : 0;
-        }
-    } else {
-        foreach (y = 0 ... image.size.y - 1, x = 0 ... image.size.x - 1) {
-            float<4> a = { alpha(image, x, y), alpha(image, x + 1, y), alpha(image, x, y + 1), alpha(image, x + 1, y + 1) };
-            for (uniform int sy = 0; sy < SUBSAMPLES; sy++) {
-                uniform float fy = subsample_offset(sy);
-                for (uniform int sx = 0; sx < SUBSAMPLES; sx++) {
-                    uniform float fx = subsample_offset(sx);
-                    float v = a[0] * (1.0f - fx) * (1.0f - fy) + a[1] * fx * (1.0f - fy) + a[2] * (1.0f - fx) * fy + a[3] * fx * fy;
-                    visible += v > cutoff ? 1 : 0;
-                }
-            }
-        }
-    }
-    return reduce_add(visible);
-}
-
-// Picks a scale at which the number of visible subsamples is closest to `target`. At the start of bin b, the
-// subsamples in bins before b are visible. Several consecutive bin starts can give that count (when the bins in
-// between are empty); of that range of scales, take the one closest to 1 so alpha changes as little as possible.
-uniform float solve_threshold_scale(uniform uint32 histogram[], uniform uint64 target) {
-    uniform uint64 best_error = 0xFFFFFFFFFFFFFFFF;
-    uniform int best_first = 0;
-    uniform int best_last = 0;
-    uniform uint64 visible = 0;
-    // The last bin start is the top of the supported range; subsamples in the last bin are never counted.
-    for (uniform int bin = 0; bin < THRESHOLD_BINS; bin++) {
-        uniform uint64 error = visible > target ? visible - target : target - visible;
-        if (error < best_error) {
-            best_error = error;
-            best_first = bin;
-            best_last = bin;
-        } else if (error == best_error && best_last == bin - 1 && histogram[bin - 1] == 0) {
-            best_last = bin;
-        }
-        visible += histogram[bin];
-    }
-    return clamp(1.0f, threshold_bin_start(best_first), threshold_bin_start(best_last));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 
 void apply_alpha_scale(uniform Image image, uniform float scale) {
-    foreach (y = 0 ... image.size.y, x = 0 ... image.size.x) {
-        uint64 index = ((uint64)y * image.size.x + x) * NUM_CHANNELS + 3;
-        image.data[index] = (uint8)min(255.0f, image.data[index] * scale + 0.5f);
+    uniform uint32* uniform pixels = (uniform uint32*)image.data;
+    foreach (i = 0 ... image.size.x * image.size.y) {
+        uint32 pixel = pixels[i];
+        uint32 alpha = (int32)min(255.0f, (float)(int32)(pixel >> 24) * scale + 0.5f);
+        pixels[i] = (pixel & 0x00FFFFFF) | (alpha << 24);
     }
 }
 
@@ -260,25 +227,19 @@ export void scale_to_alpha_coverage(uniform uint32 source_width, uniform uint32 
     uniform Image source = { (uniform uint8*)source_data, {source_width, source_height} };
     uniform Image downsampled = { downsampled_image_data, {downsampled_width, downsampled_height} };
 
-    uniform float scale = 1.0f;
+    uniform float scale;
     if (alpha_cutoff == NULL) {
-        uniform float source_histogram[256];
-        uniform float downsampled_histogram[256];
-        weighted_alpha_histogram(source, source_histogram);
-        weighted_alpha_histogram(downsampled, downsampled_histogram);
-        scale = solve_linear_scale(downsampled_histogram, linear_coverage(source_histogram));
+        uniform double unused_slope;
+        scale = solve_scale_linear(downsampled, mean_alpha(source, 1.0f, unused_slope));
     } else {
         uniform float cutoff = *alpha_cutoff;
         // Alpha never exceeds 1 (or goes below 0), so no scale changes coverage for these cutoffs.
         if (cutoff >= 1.0f || cutoff < 0.0f)
             return;
-        uniform double coverage = (uniform double)count_visible(source, cutoff) / num_samples(source);
+        uniform double coverage = (uniform double)count_visible(source, 1.0f, cutoff) / num_samples(source);
         uniform uint64 target = (uniform uint64)(coverage * num_samples(downsampled) + 0.5);
-
-        uniform uint32* uniform histogram = uniform new uniform uint32[THRESHOLD_BINS];
-        threshold_histogram(downsampled, cutoff, histogram);
-        scale = solve_threshold_scale(histogram, target);
-        delete[] histogram;
+        scale = solve_scale_with_cutoff(downsampled, cutoff, target);
     }
-    apply_alpha_scale(downsampled, scale);
+    if (scale != 1.0f)
+        apply_alpha_scale(downsampled, scale);
 }
