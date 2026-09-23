@@ -345,30 +345,24 @@ fn resample(
         pixel_stride: src.pixel_stride_in_bytes as u32,
     };
 
-    // sRGB is filtered in linear space. Decode each texel once up front to linear u16, rather than once per
-    // filter tap, and let the kernel read that instead.
+    // sRGB is filtered in linear space; the kernels decode it on load and encode it on the final write.
     let srgb = matches!(src.format, AlbedoFormat::Srgb8 | AlbedoFormat::Srgba8);
-    // Declared out here so it outlives the kernel call below, which reads it through `src_image`.
-    let linear;
-    if srgb {
-        let mut decoded = vec![0u16; (src.width * src.height) as usize * channels];
-        unsafe {
-            ispc::downsample_ispc::linearize_srgb(
-                &src_image,
-                decoded.as_mut_ptr(),
-                channels as u32,
-            );
-        }
-        linear = decoded;
-        src_image.data = linear.as_ptr().cast();
-        src_image.pixel_stride = (channels * std::mem::size_of::<u16>()) as u32;
-    }
 
-    // The horizontal pass writes a src_height * target_width intermediate of unclamped floats: Lanczos has
-    // negative lobes, so clamping or quantizing between the two passes would distort edges. Alpha weighting
-    // keeps 7 sums per texel, see `scratch_floats()` in the kernel.
-    let scratch_floats = if alpha_weighted { 7 } else { channels };
-    let mut scratch_space = vec![0f32; (src.height * target_width) as usize * scratch_floats];
+    // The kernels read rows without gaps, with up to 8 bytes per pixel (anything past the format's channels is
+    // padding). Alpha weighting needs exactly RGBA.
+    let packed;
+    let stride = src.pixel_stride_in_bytes;
+    if (alpha_weighted && stride != channels) || stride > 8 {
+        packed = pack_pixels(
+            src.pixels,
+            src.width,
+            src.height,
+            channels,
+            src.pixel_stride_in_bytes,
+        );
+        src_image.data = packed.as_ptr();
+        src_image.pixel_stride = channels as u32;
+    }
 
     // The kernel writes pixels `pixel_stride_in_bytes` apart, so the output must be sized by stride.
     let mut output = vec![0u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
@@ -393,12 +387,72 @@ fn resample(
             ispc::PixelFormat::from(src.format),
             &mut ispc::DownsamplingContext {
                 weights: *sample_weights.ispc_representation(),
-                scratch_space: scratch_space.as_mut_ptr(),
+                srgb_encode: if srgb {
+                    srgb_encode_table().as_ptr()
+                } else {
+                    std::ptr::null()
+                },
             },
         );
     }
 
     output
+}
+
+/// Linear values quantized to 16 bits to 8-bit sRGB (IEC 61966-2-1), for the kernels' final write.
+fn srgb_encode_table() -> &'static [u8; 65536] {
+    static TABLE: std::sync::OnceLock<Box<[u8; 65536]>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = Box::new([0u8; 65536]);
+        for (i, v) in table.iter_mut().enumerate() {
+            let linear = i as f64 / 65535.0;
+            let srgb = if linear <= 0.0031308 {
+                linear * 12.92
+            } else {
+                1.055 * linear.powf(1.0 / 2.4) - 0.055
+            };
+            *v = (srgb * 255.0).round() as u8;
+        }
+        table
+    })
+}
+
+/// Copies `pixels` with `pixel_stride` bytes per pixel into a tightly packed buffer of `channels` bytes per pixel.
+fn pack_pixels(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    channels: usize,
+    pixel_stride: usize,
+) -> Vec<u8> {
+    let count = (width * height) as usize;
+    let mut packed = vec![0u8; count * channels];
+    for (out, pixel) in packed
+        .chunks_exact_mut(channels)
+        .zip(pixels.chunks(pixel_stride))
+    {
+        out.copy_from_slice(&pixel[..channels]);
+    }
+    packed
+}
+
+/// Normalized box filter weights: every target texel averages the source texels it covers,
+/// `[x * ratio, (x + 1) * ratio)`, and at least one.
+fn box_weights(src: u32, target: u32) -> Vec<CachedWeight> {
+    let ratio = src as f32 / target as f32;
+    (0..target)
+        .map(|x| {
+            let start = ((x as f32 * ratio).floor() as u32).min(src - 1);
+            let end = (((x + 1) as f32 * ratio).ceil() as u32)
+                .max(start + 1)
+                .min(src);
+            let count = end - start;
+            CachedWeight {
+                start,
+                coefficients: Rc::new(vec![1.0 / count as f32; count as usize]),
+            }
+        })
+        .collect()
 }
 
 /// Downsamples an image that is meant to be used as a normal map.
@@ -414,13 +468,35 @@ pub fn downsample_normal_map(
 
     let mut data = vec![255u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
 
+    // Rgb8 is read with its pixel stride (up to 8 bytes, the rest is padding); Rg8 needs to be packed.
+    let channels = src.format.num_channel_in_memory();
+    let stride = src.pixel_stride_in_bytes;
+    let packed;
+    let (pixels, stride) = if (src.format == NormalMapFormat::Rg8TangentSpaceReconstructedZ
+        && stride != channels)
+        || stride > 8
+    {
+        packed = pack_pixels(src.pixels, src.width, src.height, channels, stride);
+        (&packed[..], channels)
+    } else {
+        (src.pixels, stride)
+    };
+
+    let width_weights = WeightCollection::new(box_weights(src.width, target_width));
+    let height_weights = if src.width == src.height && target_width == target_height {
+        width_weights.clone()
+    } else {
+        WeightCollection::new(box_weights(src.height, target_height))
+    };
+    let weights = ispc::Weights::new(width_weights, height_weights);
+
     unsafe {
         ispc::downsample_normal_map(
             &ispc::SourceImage {
                 width: src.width,
                 height: src.height,
-                data: src.pixels.as_ptr(),
-                pixel_stride: src.pixel_stride_in_bytes as u32,
+                data: pixels.as_ptr(),
+                pixel_stride: stride as u32,
             },
             &mut ispc::DownsampledImage {
                 width: target_width,
@@ -429,6 +505,10 @@ pub fn downsample_normal_map(
                 pixel_stride: src.pixel_stride_in_bytes as u32,
             },
             ispc::NormalMapFormat::from(src.format),
+            &mut ispc::DownsamplingContext {
+                weights: *weights.ispc_representation(),
+                srgb_encode: std::ptr::null(),
+            },
         );
     }
 
