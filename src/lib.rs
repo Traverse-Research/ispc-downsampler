@@ -143,7 +143,7 @@ pub fn scale_alpha_to_original_coverage(
     assert!(
         matches!(
             src.format,
-            AlbedoFormat::Rgba8Unorm | AlbedoFormat::Rgba8Snorm
+            AlbedoFormat::Rgba8Unorm | AlbedoFormat::Rgba8Snorm | AlbedoFormat::Srgba8
         ),
         "Cannot retain alpha coverage on image with no alpha channel"
     );
