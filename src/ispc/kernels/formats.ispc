@@ -4,6 +4,8 @@ enum PixelFormat {
     Rgb8Unorm,
     Rgba8Snorm,
     Rgb8Snorm,
+    Srgba8,
+    Srgb8,
 };
 
 inline uniform bool is_snorm(uniform PixelFormat format) {
@@ -16,13 +18,25 @@ inline uniform bool is_snorm(uniform PixelFormat format) {
     }
 }
 
+inline uniform bool is_srgb(uniform PixelFormat format) {
+    switch (format) {
+        case Srgba8:
+        case Srgb8:
+            return true;
+        default:
+            return false;
+    }
+}
+
 inline uniform uint32 channel_count(uniform PixelFormat format) {
     switch (format) {
         case Rgba8Unorm:
         case Rgba8Snorm:
+        case Srgba8:
             return 4;
         case Rgb8Unorm:
         case Rgb8Snorm:
+        case Srgb8:
             return 3;
     }
 }

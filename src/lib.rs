@@ -24,9 +24,13 @@ pub trait ImagePixelFormat: Copy {
 pub enum AlbedoFormat {
     Rgb8Unorm,
     Rgb8Snorm,
+    /// sRGB-encoded color, which is decoded to linear space before filtering and encoded back to
+    /// sRGB in the output.
     Srgb8,
     Rgba8Unorm,
     Rgba8Snorm,
+    /// sRGB-encoded color with linear alpha, which is decoded to linear space before filtering and
+    /// encoded back to sRGB in the output.
     Srgba8,
 }
 
@@ -55,10 +59,10 @@ impl From<AlbedoFormat> for ispc::downsample_ispc::PixelFormat {
         match value {
             AlbedoFormat::Rgb8Unorm => ispc::PixelFormat_Rgb8Unorm,
             AlbedoFormat::Rgb8Snorm => ispc::PixelFormat_Rgb8Snorm,
-            AlbedoFormat::Srgb8 => ispc::PixelFormat_Rgb8Unorm,
+            AlbedoFormat::Srgb8 => ispc::PixelFormat_Srgb8,
             AlbedoFormat::Rgba8Unorm => ispc::PixelFormat_Rgba8Unorm,
             AlbedoFormat::Rgba8Snorm => ispc::PixelFormat_Rgba8Snorm,
-            AlbedoFormat::Srgba8 => ispc::PixelFormat_Rgba8Unorm,
+            AlbedoFormat::Srgba8 => ispc::PixelFormat_Srgba8,
         }
     }
 }
@@ -343,6 +347,10 @@ fn resample(
     };
     let mut scratch_space = vec![0f32; (src.height * target_width) as usize * scratch_channels];
 
+    // Only used for sRGB formats, which are linearized one row at a time
+    let mut linear_row =
+        vec![0f32; (src.width * src.format.num_channel_in_memory() as u32) as usize];
+
     // The kernel writes pixels `pixel_stride_in_bytes` apart, so the output must be sized by stride.
     let mut output = vec![0u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
 
@@ -372,6 +380,7 @@ fn resample(
             &mut ispc::DownsamplingContext {
                 weights: *sample_weights.ispc_representation(),
                 scratch_space: scratch_space.as_mut_ptr(),
+                linear_row: linear_row.as_mut_ptr(),
             },
         );
     }
@@ -522,6 +531,83 @@ mod tests {
                     pixels.chunks(flat.len()).all(|p| p == flat),
                     "{format:?} normal tilted at {size}x{size}: {:?}",
                     &pixels[..flat.len()]
+                );
+            }
+        }
+    }
+
+    /// A flat-colored image must come out of the linearize-filter-encode roundtrip unchanged
+    #[test]
+    fn flat_srgb_image_is_preserved() {
+        for format in [AlbedoFormat::Srgb8, AlbedoFormat::Srgba8] {
+            let num_channels = format.num_channel_in_memory();
+            for value in 0..=255u8 {
+                let pixels = vec![value; 64 * 64 * num_channels];
+                let src = Image::new(&pixels, 64, 64, format);
+                let downsampled = downsample(&src, 16, 16);
+                assert!(
+                    downsampled.iter().all(|&v| v == value),
+                    "{format:?} value {value} changed to {:?}",
+                    downsampled.iter().find(|&&v| v != value)
+                );
+            }
+        }
+    }
+
+    /// Fine black and white line patterns, like the test image from
+    /// <http://www.ericbrasseur.org/gamma.html> linked in #25, carry 50% linear light: that is 188
+    /// in sRGB, not the 128 that filtering the encoded values produces.
+    #[test]
+    fn srgb_line_pattern_averages_in_linear_light() {
+        let pixels = (0..64)
+            .flat_map(|y| vec![if y % 2 == 0 { 0 } else { 255 }; 64 * 3])
+            .collect::<Vec<u8>>();
+        for (format, expected) in [(AlbedoFormat::Srgb8, 188), (AlbedoFormat::Rgb8Unorm, 128)] {
+            let downsampled = downsample(&Image::new(&pixels, 64, 64, format), 16, 16);
+            // The filter is cut off at the borders, where the pattern doesn't average out
+            for y in 2..14 {
+                let row = &downsampled[y * 16 * 3..][..16 * 3];
+                assert!(
+                    row.iter().all(|&v| v.abs_diff(expected) <= 1),
+                    "{format:?} row {y} should average to {expected}, got {row:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn srgb_downsample_with_pixel_stride() {
+        // sRGB stored as sRGBX: the padding byte must be skipped on read and left alone on write.
+        let pixels = [10u8, 20, 30, 99].repeat(8 * 8);
+        let src = Image::new_with_pixel_stride(&pixels, 8, 8, AlbedoFormat::Srgb8, 4);
+        assert_eq!(downsample(&src, 4, 4), [10u8, 20, 30, 0].repeat(4 * 4));
+    }
+
+    /// Same as `alpha_weighting_stops_transparent_bleed()`, for an sRGB-encoded leaf
+    #[test]
+    fn srgb_alpha_weighting_stops_transparent_bleed() {
+        const LEAF: [u8; 3] = [40, 200, 40];
+        let size = 64;
+        let mut pixels = Vec::new();
+        for y in 0..size {
+            for x in 0..size {
+                let leaf = (x / 4 + y / 4) % 2 == 0 || (x * y) % 7 == 0;
+                pixels.extend(if leaf { [40, 200, 40, 255] } else { [0; 4] });
+            }
+        }
+
+        let mut size = size;
+        while size > 1 {
+            let src = Image::new(&pixels, size, size, AlbedoFormat::Srgba8);
+            size /= 2;
+            let downsampled = downsample_with_alpha_weighting(&src, size, size, 3.0);
+            let dst = Image::new(&downsampled, size, size, AlbedoFormat::Srgba8);
+            pixels = scale_alpha_to_original_coverage(&src, &dst, Some(0.5));
+
+            for p in pixels.chunks(4).filter(|p| p[3] > 0) {
+                assert!(
+                    p[..3].iter().zip(LEAF).all(|(&c, l)| c.abs_diff(l) <= 1),
+                    "leaf bled to {p:?} at {size}x{size}"
                 );
             }
         }
