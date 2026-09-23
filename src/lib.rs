@@ -431,6 +431,35 @@ mod tests {
     }
 
     #[test]
+    fn lanczos_weights_are_normalized_and_in_bounds() {
+        for (src, target) in [
+            (64, 32),
+            (64, 1),
+            (64, 63),
+            (37, 12),
+            (3, 1),
+            (2, 1),
+            (1000, 333),
+        ] {
+            for filter_scale in [0.25, 1.0, 3.0, 8.0] {
+                let weights = calculate_weights(src, target, filter_scale);
+                assert_eq!(weights.len(), target as usize);
+                for (i, w) in weights.iter().enumerate() {
+                    let sum: f32 = w.coefficients.iter().sum();
+                    assert!(
+                        (sum - 1.0).abs() < 1e-3,
+                        "{src}->{target} scale {filter_scale} row {i}: sum {sum}"
+                    );
+                    assert!(
+                        w.start as usize + w.coefficients.len() <= src as usize,
+                        "{src}->{target} scale {filter_scale} row {i}: reads past the source"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn downsample_with_pixel_stride() {
         // RGB stored as RGBX: the padding byte must be skipped on read and left alone on write.
         let pixels = [10u8, 20, 30, 99].repeat(8 * 8);

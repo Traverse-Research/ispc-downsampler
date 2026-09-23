@@ -15,6 +15,9 @@ static inline varying float clean(varying float t)
 
 static inline varying float sinc(varying float x)
 {
+    // sin(x) / x is 0 / 0 at x = 0, which is hit whenever a texel sits exactly on the filter center.
+    if (abs(x) < 1e-5f)
+        return 1.0f;
     x = x * M_PI;
 
     return sin(x) / x;
@@ -41,9 +44,20 @@ export void calculate_weights_lanczos(uniform float image_scale, uniform float f
     }
 
     // The needs to be done in a normal loop because we cannot apply vectorization to it.
-    float sum = 0.0;
-    for(int i = 0; i < end - start + 1; i++) {
+    uniform int count = end - start + 1;
+    uniform float sum = 0.0;
+    for(uniform int i = 0; i < count; i++) {
         sum += weights[i];
+    }
+
+    // A small filter_scale can make the filter narrower than the texel spacing, so no texel gets any weight.
+    // Fall back to point sampling the texel nearest to the center.
+    if (sum == 0.0f) {
+        foreach(i = 0 ... count) {
+            weights[i] = 0.0f;
+        }
+        weights[clamp((uniform int)round(center - start), 0, count - 1)] = 1.0f;
+        return;
     }
 
     // Normalize the weights, such that their sum is 1.0f
