@@ -275,6 +275,8 @@ fn precompute_lanczos_weights(
     ispc::Weights::new(width_weights, height_weights)
 }
 
+/// If `src` has a pixel stride larger than its format's pixel size, the returned `Vec` uses the same stride, with the padding bytes set to 0.
+///
 /// Version of [downsample] which allows for a custom filter scale, thus trading between speed and final image quality.
 ///
 /// `filter_scale` controls how many samples are made relative to the size ratio between the source and target resolutions.
@@ -335,11 +337,8 @@ fn resample(
     let mut scratch_space =
         vec![0u8; (src.height * target_width * src.format.num_channel_in_memory() as u32) as usize];
 
-    let mut output = vec![
-        0u8;
-        (target_width * target_height * src.format.num_channel_in_memory() as u32)
-            as usize
-    ];
+    // The kernel writes pixels `pixel_stride_in_bytes` apart, so the output must be sized by stride.
+    let mut output = vec![0u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
 
     let kernel = if src.format.num_channel_in_memory() == 3 {
         ispc::downsample_ispc::resample_with_cached_weights_3
@@ -429,6 +428,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn downsample_with_pixel_stride() {
+        // RGB stored as RGBX: the padding byte must be skipped on read and left alone on write.
+        let pixels = [10u8, 20, 30, 99].repeat(8 * 8);
+        let src = Image::new_with_pixel_stride(&pixels, 8, 8, AlbedoFormat::Rgb8Unorm, 4);
+        assert_eq!(downsample(&src, 4, 4), [10u8, 20, 30, 0].repeat(4 * 4));
     }
 
     // A leaf on a cut-away background: transparent texels are black and must not darken the leaf.
