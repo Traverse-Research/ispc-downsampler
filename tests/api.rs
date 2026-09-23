@@ -2,7 +2,7 @@
 //! code paths) rather than golden images, so they hold across filter tweaks that don't change behaviour.
 
 use ispc_downsampler::{
-    downsample, downsample_normal_map, downsample_with_alpha_weighting,
+    downsample, downsample_normal_map, downsample_normal_map_into, downsample_with_alpha_weighting,
     downsample_with_custom_scale, scale_alpha_to_original_coverage, AlbedoFormat, Image,
     ImagePixelFormat, NormalMapFormat,
 };
@@ -555,25 +555,32 @@ fn normal_map_output_size_and_padding() {
 
 #[test]
 fn normal_map_stride_matches_tightly_packed() {
+    // Padding by 1 and 2 bytes: for 2:1 this compares the dedicated 2:1 kernels (packed Rgb8, RGBX, packed Rg8) with
+    // the generic box path (the other strides), which must agree exactly.
     for format in NORMAL_FORMATS {
         let channels = format.num_channel_in_memory();
         let packed = random_normals(20 * 20, channels, 31);
-        let padded = packed
-            .chunks(channels)
-            .flat_map(|p| [p, &[0][..]].concat())
-            .collect::<Vec<_>>();
-        let expected = downsample_normal_map(&Image::new(&packed, 20, 20, format), 10, 10);
-        let out = downsample_normal_map(
-            &Image::new_with_pixel_stride(&padded, 20, 20, format, channels + 1),
-            10,
-            10,
-        );
-        assert!(
-            out.chunks(channels + 1)
-                .map(|p| &p[..channels])
-                .eq(expected.chunks(channels)),
-            "{format:?}"
-        );
+        for padding in [1, 2] {
+            let stride = channels + padding;
+            let padded = packed
+                .chunks(channels)
+                .flat_map(|p| [p, &[0, 0][..padding]].concat())
+                .collect::<Vec<_>>();
+            for (tw, th) in [(10, 10), (7, 5)] {
+                let expected = downsample_normal_map(&Image::new(&packed, 20, 20, format), tw, th);
+                let out = downsample_normal_map(
+                    &Image::new_with_pixel_stride(&padded, 20, 20, format, stride),
+                    tw,
+                    th,
+                );
+                assert!(
+                    out.chunks(stride)
+                        .map(|p| &p[..channels])
+                        .eq(expected.chunks(channels)),
+                    "{format:?} stride {stride} to {tw}x{th}"
+                );
+            }
+        }
     }
 }
 
@@ -639,6 +646,54 @@ fn normal_map_opposite_tilts_average_to_straight_up() {
             );
         }
     }
+}
+
+#[test]
+fn normal_map_into_matches_and_overwrites_a_reused_buffer() {
+    // Every layout and a 2:1 as well as a generic ratio, into a buffer full of garbage from earlier use.
+    for (format, stride) in [
+        (NormalMapFormat::Rgb8, 3),
+        (NormalMapFormat::Rgb8, 4),
+        (NormalMapFormat::Rgb8, 5),
+        (NormalMapFormat::Rg8TangentSpaceReconstructedZ, 2),
+        (NormalMapFormat::Rg8TangentSpaceReconstructedZ, 3),
+    ] {
+        let channels = format.num_channel_in_memory();
+        let data = random_normals(40 * 24, channels, 59)
+            .chunks(channels)
+            .flat_map(|p| [p, &[7, 7, 7][..stride - channels]].concat())
+            .collect::<Vec<_>>();
+        let src = Image::new_with_pixel_stride(&data, 40, 24, format, stride);
+        for (tw, th) in [(20, 12), (13, 7)] {
+            let expected = downsample_normal_map(&src, tw, th);
+            let mut reused = noise(expected.len() + 17, 61);
+            downsample_normal_map_into(&src, tw, th, &mut reused);
+            assert_eq!(
+                &reused[..expected.len()],
+                &expected[..],
+                "{format:?} stride {stride} to {tw}x{th}"
+            );
+            assert!(
+                expected
+                    .chunks(stride)
+                    .all(|p| p[channels..].iter().all(|&v| v == 255)),
+                "{format:?} stride {stride}: padding"
+            );
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "output needs")]
+fn normal_map_into_too_small_panics() {
+    let data = vec![128u8; 8 * 8 * 3];
+    let mut output = vec![0u8; 4 * 4 * 3 - 1];
+    downsample_normal_map_into(
+        &Image::new(&data, 8, 8, NormalMapFormat::Rgb8),
+        4,
+        4,
+        &mut output,
+    );
 }
 
 #[test]

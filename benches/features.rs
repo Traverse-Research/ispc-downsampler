@@ -4,7 +4,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ispc_downsampler::{
-    downsample, downsample_normal_map, downsample_with_alpha_weighting,
+    downsample, downsample_normal_map, downsample_normal_map_into, downsample_with_alpha_weighting,
     downsample_with_custom_scale, scale_alpha_to_original_coverage, AlbedoFormat, Image,
     NormalMapFormat,
 };
@@ -196,6 +196,24 @@ fn normal_maps(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("rgb8_stride4", 1024), |b| {
         b.iter(|| downsample_normal_map(&src, 1024, 1024))
     });
+
+    // Writing into a reused buffer, as a pipeline processing many textures would.
+    let mut output = vec![0u8; 1024 * 1024 * 4];
+    for (name, data, format, stride) in [
+        ("rgb8_into", &rgb, NormalMapFormat::Rgb8, 3),
+        (
+            "rg8_reconstruct_z_into",
+            &rg,
+            NormalMapFormat::Rg8TangentSpaceReconstructedZ,
+            2,
+        ),
+        ("rgb8_stride4_into", &rgbx, NormalMapFormat::Rgb8, 4),
+    ] {
+        let src = Image::new_with_pixel_stride(data, size, size, format, stride);
+        group.bench_function(BenchmarkId::new(name, 1024), |b| {
+            b.iter(|| downsample_normal_map_into(&src, 1024, 1024, &mut output))
+        });
+    }
     group.finish();
 }
 
@@ -288,6 +306,39 @@ fn mip_chains(c: &mut Criterion) {
                 s /= 2;
             }
             data
+        })
+    });
+    // A cook reusing two buffers for the whole chain instead of allocating every level.
+    let mut buffers = [
+        vec![0u8; (size / 2 * size / 2 * 3) as usize],
+        vec![0u8; (size / 4 * size / 4 * 3) as usize],
+    ];
+    group.bench_function("normal_rgb8_into", |b| {
+        b.iter(|| {
+            let [even, odd] = &mut buffers;
+            downsample_normal_map_into(
+                &Image::new(&rgb, size, size, NormalMapFormat::Rgb8),
+                size / 2,
+                size / 2,
+                even,
+            );
+            let mut s = size / 2;
+            let mut from_even = true;
+            while s > 1 {
+                let (src, dst) = if from_even {
+                    (&*even, &mut *odd)
+                } else {
+                    (&*odd, &mut *even)
+                };
+                downsample_normal_map_into(
+                    &Image::new(&src[..(s * s * 3) as usize], s, s, NormalMapFormat::Rgb8),
+                    s / 2,
+                    s / 2,
+                    dst,
+                );
+                from_even = !from_even;
+                s /= 2;
+            }
         })
     });
     group.finish();
