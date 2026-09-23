@@ -774,7 +774,7 @@ fn srgba_alpha_stays_linear() {
     let data = noise(32 * 32 * 4, 47);
     let srgb = downsample(&Image::new(&data, 32, 32, AlbedoFormat::Srgba8), 11, 11);
     let unorm = downsample(&Image::new(&data, 32, 32, AlbedoFormat::Rgba8Unorm), 11, 11);
-    // sRGB goes through a linear u16 scratch space and unorm through u8, so alpha may round differently by 1.
+    // sRGB reads alpha widened to u16 and unorm reads it as u8, so float rounding may differ by 1.
     let alpha = |v: &[u8]| v.chunks(4).map(|p| p[3]).collect::<Vec<_>>();
     assert_close(&alpha(&srgb), &alpha(&unorm), 1, "alpha");
     assert_ne!(
@@ -826,4 +826,39 @@ fn alpha_coverage_accepts_srgba() {
         )
     };
     assert_eq!(scale(AlbedoFormat::Srgba8), scale(AlbedoFormat::Rgba8Unorm));
+}
+
+#[test]
+fn pass_order_does_not_matter() {
+    // The horizontal and vertical passes commute only if nothing is clamped or quantized in between. Lanczos
+    // has negative lobes, so high-contrast input overshoots after the first pass; clamping it there would make
+    // filtering the transposed image give a different result.
+    let size = 48usize;
+    let data = noise(size * size * 4, 53)
+        .into_iter()
+        .map(|v| if v > 127 { 255 } else { 0 })
+        .collect::<Vec<_>>();
+    let transpose = |d: &[u8], n: usize| {
+        let mut t = vec![0u8; d.len()];
+        for y in 0..n {
+            for x in 0..n {
+                t[(x * n + y) * 4..][..4].copy_from_slice(&d[(y * n + x) * 4..][..4]);
+            }
+        }
+        t
+    };
+    for format in [AlbedoFormat::Rgba8Unorm, AlbedoFormat::Srgba8] {
+        for target in [24u32, 17] {
+            let t = target as usize;
+            let out = downsample(&Image::new(&data, 48, 48, format), target, target);
+            let transposed = transpose(&data, size);
+            let out_t = downsample(&Image::new(&transposed, 48, 48, format), target, target);
+            assert_close(
+                &out,
+                &transpose(&out_t, t),
+                1,
+                &format!("{format:?} to {target}"),
+            );
+        }
+    }
 }

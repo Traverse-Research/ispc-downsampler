@@ -255,7 +255,6 @@ fn bindgen_test_layout_SampleWeights() {
 pub struct DownsamplingContext {
     pub weights: SampleWeights,
     pub scratch_space: *mut f32,
-    pub linear_row: *mut f32,
 }
 #[test]
 fn bindgen_test_layout_DownsamplingContext() {

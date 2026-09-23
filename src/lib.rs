@@ -346,7 +346,7 @@ fn resample(
     };
 
     // sRGB is filtered in linear space. Decode each texel once up front to linear u16, rather than once per
-    // filter tap, and let the kernel read that instead. The scratch space then holds linear u16 as well.
+    // filter tap, and let the kernel read that instead.
     let srgb = matches!(src.format, AlbedoFormat::Srgb8 | AlbedoFormat::Srgba8);
     // Declared out here so it outlives the kernel call below, which reads it through `src_image`.
     let linear;
@@ -364,10 +364,11 @@ fn resample(
         src_image.pixel_stride = (channels * std::mem::size_of::<u16>()) as u32;
     }
 
-    // The new implementation needs a src_height * target_width intermediate buffer.
-    let scratch_channel_size = if srgb { std::mem::size_of::<u16>() } else { 1 };
-    let mut scratch_space =
-        vec![0u8; (src.height * target_width) as usize * channels * scratch_channel_size];
+    // The horizontal pass writes a src_height * target_width intermediate of unclamped floats: Lanczos has
+    // negative lobes, so clamping or quantizing between the two passes would distort edges. Alpha weighting
+    // keeps 7 sums per texel, see `scratch_floats()` in the kernel.
+    let scratch_floats = if alpha_weighted { 7 } else { channels };
+    let mut scratch_space = vec![0f32; (src.height * target_width) as usize * scratch_floats];
 
     // The kernel writes pixels `pixel_stride_in_bytes` apart, so the output must be sized by stride.
     let mut output = vec![0u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
