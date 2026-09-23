@@ -5,19 +5,28 @@
 #include "linearization.ispc"
 
 
-inline float<3> sample_3_channels(const uniform uint8* varying pixel_ptr) {
+// `linear16`: the pixel is stored as linear u16 rather than u8, see `linearize_srgb()`.
+inline float<3> sample_3_channels(const uniform uint8* varying pixel_ptr, uniform bool linear16) {
+    varying float<3> dst = {0.0f, 0.0f, 0.0f};
+    if (linear16) {
+        dst = *((const uniform uint16<3>*)(pixel_ptr)) / 65535.0f;
+        return dst;
+    }
     // Memory reinterpretation to read all channels at once rather than one-by-one.
     // While testing, this proved more performant than reading one-by-one.
     const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
-    varying float<3> dst = {0.0f, 0.0f, 0.0f};
     dst = *pixel_ptr3 / 255.0f;
 
     return dst;
 }
 
-inline float<4> sample_4_channels(const uniform uint8* varying pixel_ptr) {
-    const uniform uint8<4>* pixel_ptr4 = (const uniform uint8<4>*)(pixel_ptr);
+inline float<4> sample_4_channels(const uniform uint8* varying pixel_ptr, uniform bool linear16) {
     varying float<4> dst = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (linear16) {
+        dst = *((const uniform uint16<4>*)(pixel_ptr)) / 65535.0f;
+        return dst;
+    }
+    const uniform uint8<4>* pixel_ptr4 = (const uniform uint8<4>*)(pixel_ptr);
     dst = *pixel_ptr4 / 255.0f;
 
     return dst;
@@ -76,17 +85,8 @@ inline float<3> sample_normal(const uniform uint8* varying pixel_ptr, uniform No
     return normal;
 }
 
-inline void write_3_channels(varying float<3> color, uniform float* varying pixel_ptr) {
-    uniform float<3>* pixel_ptr3 = (uniform float<3>*)(pixel_ptr);
-    *pixel_ptr3 = color;
-}
-
-inline void write_4_channels(varying float<4> color, uniform float* varying pixel_ptr) {
-    uniform float<4>* pixel_ptr4 = (uniform float<4>*)(pixel_ptr);
-    *pixel_ptr4 = color;
-}
-
-inline void clean_and_write_3_channels(varying float<3> color, uniform uint8* varying pixel_ptr, uniform bool srgb) {
+// `linear16` stores linear u16 (for the scratch space), otherwise u8, sRGB encoded if `encode_srgb`.
+inline void clean_and_write_3_channels(varying float<3> color, uniform uint8* varying pixel_ptr, uniform bool linear16, uniform bool encode_srgb) {
     // The final color is a sum of numbers that are multiplied by the weights of their respective pixels.
     // Because of their numbers, floating point precision leads to the final color being potentially outside of the 0-255 range by a slight margin.
     // This would cause an underflow/overflow, which we avoid with the clamps.
@@ -94,7 +94,15 @@ inline void clean_and_write_3_channels(varying float<3> color, uniform uint8* va
     color[0] = clamp(color[0], 0.0f, 1.0f);
     color[1] = clamp(color[1], 0.0f, 1.0f);
     color[2] = clamp(color[2], 0.0f, 1.0f);
-    if (srgb) {
+    if (linear16) {
+        color = color * 65535.0f + 0.5f;
+        uniform uint16* varying ptr16 = (uniform uint16* varying)pixel_ptr;
+        ptr16[0] = color[0];
+        ptr16[1] = color[1];
+        ptr16[2] = color[2];
+        return;
+    }
+    if (encode_srgb) {
         color[0] = linear_to_srgb(color[0]);
         color[1] = linear_to_srgb(color[1]);
         color[2] = linear_to_srgb(color[2]);
@@ -106,13 +114,22 @@ inline void clean_and_write_3_channels(varying float<3> color, uniform uint8* va
     pixel_ptr[2] = color[2];
 }
 
-inline void clean_and_write_4_channels(varying float<4> color, uniform uint8* varying pixel_ptr, uniform bool srgb) {
+inline void clean_and_write_4_channels(varying float<4> color, uniform uint8* varying pixel_ptr, uniform bool linear16, uniform bool encode_srgb) {
     color[0] = clamp(color[0], 0.0f, 1.0f);
     color[1] = clamp(color[1], 0.0f, 1.0f);
     color[2] = clamp(color[2], 0.0f, 1.0f);
     color[3] = clamp(color[3], 0.0f, 1.0f);
-    if (srgb) {
-        // Alpha is not sRGB-encoded
+    if (linear16) {
+        color = color * 65535.0f + 0.5f;
+        uniform uint16* varying ptr16 = (uniform uint16* varying)pixel_ptr;
+        ptr16[0] = color[0];
+        ptr16[1] = color[1];
+        ptr16[2] = color[2];
+        ptr16[3] = color[3];
+        return;
+    }
+    if (encode_srgb) {
+        // Alpha is always linear.
         color[0] = linear_to_srgb(color[0]);
         color[1] = linear_to_srgb(color[1]);
         color[2] = linear_to_srgb(color[2]);
@@ -274,8 +291,11 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
     uniform WeightCollection * uniform vertical_weight_collection = ctx->weights.vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = ctx->weights.horizontal_weights;
     const uniform uint num_channels = channel_count(pixel_format);
-    const uniform uint scratch_channels = scratch_channel_count(pixel_format, alpha_weighted);
+    // sRGB is filtered in linear space: the source has already been decoded to linear u16 by `linearize_srgb()`,
+    // the scratch space is linear u16 as well, and only the final write encodes back to sRGB u8.
+    // Decoding once per texel rather than once per filter tap keeps the cost close to unorm.
     const uniform bool srgb = is_srgb(pixel_format);
+    const uniform uint scratch_pixel_size = num_channels * (srgb ? 2 : 1);
 
     // Accumulate only along the width for each pixel, sampling from the source image
     // Results in the source image being downsampled to src->height X dst->width
@@ -309,10 +329,17 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
             // Keep the intermediate result in full precision, and don't clamp it yet: negative lobes of the
             // filter are only cancelled out after the vertical pass.
             if (channel_count(pixel_format) == 3)
-                write_3_channels(color3, ctx->scratch_space + scratch_write_address);
+                color3 += sample_3_channels(src->data + src_read_address, srgb) * weight;
             if (channel_count(pixel_format) == 4)
-                write_4_channels_to_scratch(color4, unweighted, ctx->scratch_space + scratch_write_address, alpha_weighted);
+                accumulate_4_channels(color4, unweighted, sample_4_channels(src->data + src_read_address, srgb), weight, alpha_weighted);
         }
+
+        uint64 scratch_write_address = (y * dst->width + x) * scratch_pixel_size;
+
+        if (channel_count(pixel_format) == 3)
+            clean_and_write_3_channels(color3, ctx->scratch_space + scratch_write_address, srgb, false);
+        if (channel_count(pixel_format) == 4)
+            clean_and_write_4_channels(resolve_4_channels(color4, unweighted, alpha_weighted), ctx->scratch_space + scratch_write_address, srgb, false);
     }
     // Accumulate the scratch space data along the height
     // Downsamples the src_height X dst->width image to dst->height * dst->width
@@ -327,27 +354,39 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
         for (uint32 i = 0; i < num_vertical_weights; i++) {
             float weight = vertical_weights[i];
             uint32 scratch_y = src_height_start + i;
-            uint64 scratch_read_address = (scratch_y * dst->width + x) * scratch_channels;
+            uint64 scratch_read_address = (scratch_y * dst->width + x) * scratch_pixel_size;
 
             if (channel_count(pixel_format) == 3)
-                color3 += sample_3_channels(ctx->scratch_space + scratch_read_address) * weight;
-            // The scratch space already holds alpha weighted sums, which only need to be accumulated
+                color3 += sample_3_channels(ctx->scratch_space + scratch_read_address, srgb) * weight;
             if (channel_count(pixel_format) == 4)
-                color4 += sample_4_channels(ctx->scratch_space + scratch_read_address) * weight;
-            if (alpha_weighted)
-                unweighted += sample_3_channels(ctx->scratch_space + scratch_read_address + 4) * weight;
+                accumulate_4_channels(color4, unweighted, sample_4_channels(ctx->scratch_space + scratch_read_address, srgb), weight, alpha_weighted);
         }
 
         uint64 out_write_address = (y * dst->width + x) * dst->pixel_stride;
         assert(out_write_address < dst->height * dst->width * dst->pixel_stride);
         if (channel_count(pixel_format) == 3)
-            clean_and_write_3_channels(color3, dst->data + out_write_address, srgb);
+            clean_and_write_3_channels(color3, dst->data + out_write_address, false, srgb);
         if (channel_count(pixel_format) == 4)
-            clean_and_write_4_channels(resolve_4_channels(color4, unweighted, alpha_weighted), dst->data + out_write_address, srgb);
+            clean_and_write_4_channels(resolve_4_channels(color4, unweighted, alpha_weighted), dst->data + out_write_address, false, srgb);
     }
 }
 
-/// scratch_space must be at least src_height * dst->width pixels big
+/// Decodes an sRGB image to tightly packed linear u16, which is what the resample kernels read for sRGB formats.
+/// Alpha (the 4th channel) is linear already and only widened.
+export void linearize_srgb(const uniform SourceImage * uniform src, uniform uint16 out[], uniform uint32 num_channels) {
+    foreach (i = 0 ... src->width * src->height) {
+        const uniform uint8* varying pixel_ptr = src->data + (uint64)i * src->pixel_stride;
+        uniform uint16* varying out_ptr = out + (uint64)i * num_channels;
+        out_ptr[0] = SRGB_TO_LINEAR16[pixel_ptr[0]];
+        out_ptr[1] = SRGB_TO_LINEAR16[pixel_ptr[1]];
+        out_ptr[2] = SRGB_TO_LINEAR16[pixel_ptr[2]];
+        if (num_channels == 4) {
+            out_ptr[3] = (uint16)pixel_ptr[3] * 257;
+        }
+    }
+}
+
+/// scratch_space must be at least src_height * dst->width pixels big, and twice that for sRGB formats.
 export void resample_with_cached_weights_3(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx) {
     const uniform bool is_normal_map = false;
     assume(channel_count(pixel_format) == 3);

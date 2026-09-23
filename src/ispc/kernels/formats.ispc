@@ -19,13 +19,7 @@ inline uniform bool is_snorm(uniform PixelFormat format) {
 }
 
 inline uniform bool is_srgb(uniform PixelFormat format) {
-    switch (format) {
-        case Srgba8:
-        case Srgb8:
-            return true;
-        default:
-            return false;
-    }
+    return format == Srgba8 || format == Srgb8;
 }
 
 inline uniform uint32 channel_count(uniform PixelFormat format) {

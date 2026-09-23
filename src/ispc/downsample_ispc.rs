@@ -362,6 +362,9 @@ extern "C" {
     );
 }
 extern "C" {
+    pub fn linearize_srgb(src: *const SourceImage, out: *mut u16, num_channels: u32);
+}
+extern "C" {
     pub fn resample_with_cached_weights_3(
         src: *const SourceImage,
         dst: *mut DownsampledImage,
