@@ -389,3 +389,51 @@ pub fn downsample_normal_map(
 
     data
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Mip chains are built by feeding each mip back in, so any per-call bias accumulates.
+    #[test]
+    fn mip_chain_preserves_constant_color() {
+        for value in 0..=255u8 {
+            let mut pixels = vec![value; 64 * 64 * 4];
+            let mut size = 64;
+            while size > 1 {
+                let src = Image::new(&pixels, size, size, AlbedoFormat::Rgba8Unorm);
+                size /= 2;
+                pixels = downsample(&src, size, size);
+                let bad = pixels.iter().find(|&&p| p != value);
+                assert!(
+                    bad.is_none(),
+                    "value {value} drifted to {bad:?} at {size}x{size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mip_chain_preserves_flat_normal() {
+        for (format, flat) in [
+            (NormalMapFormat::Rgb8, &[128u8, 128, 255][..]),
+            (
+                NormalMapFormat::Rg8TangentSpaceReconstructedZ,
+                &[128u8, 128][..],
+            ),
+        ] {
+            let mut pixels = flat.repeat(64 * 64);
+            let mut size = 64;
+            while size > 1 {
+                let src = Image::new(&pixels, size, size, format);
+                size /= 2;
+                pixels = downsample_normal_map(&src, size, size);
+                assert!(
+                    pixels.chunks(flat.len()).all(|p| p == flat),
+                    "{format:?} normal tilted at {size}x{size}: {:?}",
+                    &pixels[..flat.len()]
+                );
+            }
+        }
+    }
+}

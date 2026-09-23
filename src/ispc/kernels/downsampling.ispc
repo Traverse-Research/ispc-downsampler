@@ -58,7 +58,7 @@ inline void clean_and_write_3_channels(varying float<3> color, uniform uint8* va
     color[0] = clamp(color[0], 0.0f, 1.0f);
     color[1] = clamp(color[1], 0.0f, 1.0f);
     color[2] = clamp(color[2], 0.0f, 1.0f);
-    color *= 255.0f;
+    color = color * 255.0f + 0.5f;
 
     pixel_ptr[0] = color[0];
     pixel_ptr[1] = color[1];
@@ -70,7 +70,7 @@ inline void clean_and_write_4_channels(varying float<4> color, uniform uint8* va
     color[1] = clamp(color[1], 0.0f, 1.0f);
     color[2] = clamp(color[2], 0.0f, 1.0f);
     color[3] = clamp(color[3], 0.0f, 1.0f);
-    color *= 255.0f;
+    color = color * 255.0f + 0.5f;
 
     pixel_ptr[0] = color[0];
     pixel_ptr[1] = color[1];
@@ -87,7 +87,7 @@ inline void clean_and_write_normal(varying float<3> normal, uniform uint8* varyi
             normal[0] = clamp(normal[0], 0.0f, 1.0f);
             normal[1] = clamp(normal[1], 0.0f, 1.0f);
             normal[2] = clamp(normal[2], 0.0f, 1.0f);
-            normal *= 255.0f;
+            normal = normal * 255.0f + 0.5f;
 
             pixel_ptr[0] = (uint8)normal[0];
             pixel_ptr[1] = (uint8)normal[1];
@@ -97,7 +97,7 @@ inline void clean_and_write_normal(varying float<3> normal, uniform uint8* varyi
         case R8g8TangentSpaceReconstructedZ: {
             normal[0] = clamp(normal[0], 0.0f, 1.0f);
             normal[1] = clamp(normal[1], 0.0f, 1.0f);
-            normal *= 255.0f;
+            normal = normal * 255.0f + 0.5f;
 
             pixel_ptr[0] = normal[0];
             pixel_ptr[1] = normal[1];
