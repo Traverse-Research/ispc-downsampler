@@ -248,18 +248,17 @@ export void downsample_normal_map(const uniform SourceImage * uniform src, unifo
     float<2> ratio = { (float)src->width / (float)dst->width, (float)src->height / (float)dst->height };
     foreach_tiled(y =  0 ... dst->height, x = 0 ... dst->width) {
 
-        float<2> pixel_center = { (float)x + 0.5f, (float)y + 0.5f };
-
+        // Box filter over the source texels that the destination texel covers: [x * ratio, (x + 1) * ratio).
         uint<2> start = { 0, 0 };
         uint<2> end = { 0, 0 };
         float pixel_weight = 0.0;
 
         {
-            start.x = max((int)floor(x * ratio.x - floor(ratio.x / 2.0f) + 0.5f), 0);
-            start.y = max((int)floor(y * ratio.y - floor(ratio.y / 2.0f) + 0.5f), 0);
+            start.x = min((uint)floor(x * ratio.x), src->width - 1);
+            start.y = min((uint)floor(y * ratio.y), src->height - 1);
 
-            end.x = min((int)floor(x * ratio.x + ceil(ratio.x / 2.0f) + 0.5f) + 1, src->width);
-            end.y = min((int)floor(y * ratio.y + ceil(ratio.y / 2.0f) + 0.5f) + 1, src->height);
+            end.x = min(max((uint)ceil((x + 1) * ratio.x), start.x + 1), src->width);
+            end.y = min(max((uint)ceil((y + 1) * ratio.y), start.y + 1), src->height);
 
             pixel_weight = (float)((end.x - start.x) * (end.y - start.y));
         }
