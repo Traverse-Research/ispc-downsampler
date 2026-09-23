@@ -289,6 +289,38 @@ pub fn downsample_with_custom_scale(
     target_height: u32,
     filter_scale: f32,
 ) -> Vec<u8> {
+    resample(src, target_width, target_height, filter_scale, false)
+}
+
+/// Version of [downsample_with_custom_scale] which weights each texel's colour by its alpha.
+///
+/// Use this for cut-out textures (foliage, fences, ...): without it the colour stored under fully transparent texels,
+/// usually black, bleeds into the visible texels at coarser mip levels.
+/// Texels with no visible texels under the filter fall back to the unweighted colour.
+/// Pairs with [scale_alpha_to_original_coverage], which only rescales alpha and leaves the colour as is.
+///
+/// Panics if `src` has no alpha channel.
+pub fn downsample_with_alpha_weighting(
+    src: &Image<'_, AlbedoFormat>,
+    target_width: u32,
+    target_height: u32,
+    filter_scale: f32,
+) -> Vec<u8> {
+    assert_eq!(
+        src.format.num_channel_in_memory(),
+        4,
+        "Cannot weight by alpha on image with no alpha channel"
+    );
+    resample(src, target_width, target_height, filter_scale, true)
+}
+
+fn resample(
+    src: &Image<'_, AlbedoFormat>,
+    target_width: u32,
+    target_height: u32,
+    filter_scale: f32,
+    alpha_weighted: bool,
+) -> Vec<u8> {
     assert!(src.format.pixel_size_in_bytes() <= src.pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
 
     let sample_weights = precompute_lanczos_weights(
@@ -309,48 +341,34 @@ pub fn downsample_with_custom_scale(
             as usize
     ];
 
+    let kernel = if src.format.num_channel_in_memory() == 3 {
+        ispc::downsample_ispc::resample_with_cached_weights_3
+    } else if alpha_weighted {
+        ispc::downsample_ispc::resample_with_cached_weights_4_alpha_weighted
+    } else {
+        ispc::downsample_ispc::resample_with_cached_weights_4
+    };
+
     unsafe {
-        if src.format.num_channel_in_memory() == 3 {
-            ispc::downsample_ispc::resample_with_cached_weights_3(
-                &ispc::SourceImage {
-                    width: src.width,
-                    height: src.height,
-                    data: src.pixels.as_ptr(),
-                    pixel_stride: src.pixel_stride_in_bytes as u32,
-                },
-                &mut ispc::DownsampledImage {
-                    width: target_width,
-                    height: target_height,
-                    data: output.as_mut_ptr(),
-                    pixel_stride: src.pixel_stride_in_bytes as u32,
-                },
-                ispc::PixelFormat::from(src.format),
-                &mut ispc::DownsamplingContext {
-                    weights: *sample_weights.ispc_representation(),
-                    scratch_space: scratch_space.as_mut_ptr(),
-                },
-            );
-        } else {
-            ispc::downsample_ispc::resample_with_cached_weights_4(
-                &ispc::SourceImage {
-                    width: src.width,
-                    height: src.height,
-                    data: src.pixels.as_ptr(),
-                    pixel_stride: src.pixel_stride_in_bytes as u32,
-                },
-                &mut ispc::DownsampledImage {
-                    width: target_width,
-                    height: target_height,
-                    data: output.as_mut_ptr(),
-                    pixel_stride: src.pixel_stride_in_bytes as u32,
-                },
-                ispc::PixelFormat::from(src.format),
-                &mut ispc::DownsamplingContext {
-                    weights: *sample_weights.ispc_representation(),
-                    scratch_space: scratch_space.as_mut_ptr(),
-                },
-            );
-        }
+        kernel(
+            &ispc::SourceImage {
+                width: src.width,
+                height: src.height,
+                data: src.pixels.as_ptr(),
+                pixel_stride: src.pixel_stride_in_bytes as u32,
+            },
+            &mut ispc::DownsampledImage {
+                width: target_width,
+                height: target_height,
+                data: output.as_mut_ptr(),
+                pixel_stride: src.pixel_stride_in_bytes as u32,
+            },
+            ispc::PixelFormat::from(src.format),
+            &mut ispc::DownsamplingContext {
+                weights: *sample_weights.ispc_representation(),
+                scratch_space: scratch_space.as_mut_ptr(),
+            },
+        );
     }
 
     output
@@ -408,6 +426,36 @@ mod tests {
                 assert!(
                     bad.is_none(),
                     "value {value} drifted to {bad:?} at {size}x{size}"
+                );
+            }
+        }
+    }
+
+    // A leaf on a cut-away background: transparent texels are black and must not darken the leaf.
+    #[test]
+    fn alpha_weighting_stops_transparent_bleed() {
+        const LEAF: [u8; 3] = [40, 200, 40];
+        let size = 64;
+        let mut pixels = Vec::new();
+        for y in 0..size {
+            for x in 0..size {
+                let leaf = (x / 4 + y / 4) % 2 == 0 || (x * y) % 7 == 0;
+                pixels.extend(if leaf { [40, 200, 40, 255] } else { [0; 4] });
+            }
+        }
+
+        let mut size = size;
+        while size > 1 {
+            let src = Image::new(&pixels, size, size, AlbedoFormat::Rgba8Unorm);
+            size /= 2;
+            let downsampled = downsample_with_alpha_weighting(&src, size, size, 3.0);
+            let dst = Image::new(&downsampled, size, size, AlbedoFormat::Rgba8Unorm);
+            pixels = scale_alpha_to_original_coverage(&src, &dst, Some(0.5));
+
+            for p in pixels.chunks(4).filter(|p| p[3] > 0) {
+                assert!(
+                    p[..3].iter().zip(LEAF).all(|(&c, l)| c.abs_diff(l) <= 1),
+                    "leaf bled to {p:?} at {size}x{size}"
                 );
             }
         }

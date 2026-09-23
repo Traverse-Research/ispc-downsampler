@@ -124,7 +124,42 @@ struct DownsamplingContext {
     uniform uint8* scratch_space;
 };
 
-inline void resample_with_cached_weights(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx) {
+// Accumulates `sample` into `color`. When alpha weighting, rgb is weighted by alpha as well so fully transparent
+// texels (often black) do not bleed into opaque neighbours. `unweighted` keeps the plain rgb sum as a fallback.
+inline void accumulate_4_channels(varying float<4>& color, varying float<3>& unweighted, varying float<4> sample, varying float weight, uniform bool alpha_weighted) {
+    if (alpha_weighted) {
+        float alpha_weight = sample[3] * weight;
+        color[0] += sample[0] * alpha_weight;
+        color[1] += sample[1] * alpha_weight;
+        color[2] += sample[2] * alpha_weight;
+        color[3] += alpha_weight;
+        unweighted[0] += sample[0] * weight;
+        unweighted[1] += sample[1] * weight;
+        unweighted[2] += sample[2] * weight;
+    } else {
+        color += sample * weight;
+    }
+}
+
+// Turns the alpha weighted rgb sum back into a colour. Keeping the intermediate un-premultiplied avoids
+// losing rgb precision on low alpha texels when it is stored as u8 in scratch space.
+inline float<4> resolve_4_channels(varying float<4> color, varying float<3> unweighted, uniform bool alpha_weighted) {
+    if (alpha_weighted) {
+        // Nothing visible under the filter, so there is nothing to weight by.
+        if (color[3] > 0.5f / 255.0f) {
+            color[0] /= color[3];
+            color[1] /= color[3];
+            color[2] /= color[3];
+        } else {
+            color[0] = unweighted[0];
+            color[1] = unweighted[1];
+            color[2] = unweighted[2];
+        }
+    }
+    return color;
+}
+
+inline void resample_with_cached_weights(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx, uniform bool alpha_weighted) {
     uniform WeightCollection * uniform vertical_weight_collection = ctx->weights.vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = ctx->weights.horizontal_weights;
     const uniform uint num_channels = channel_count(pixel_format);
@@ -139,6 +174,7 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
 
         float<3> color3 = {0.0f, 0.0f, 0.0f};
         float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
+        float<3> unweighted = {0.0f, 0.0f, 0.0f};
         for (uint32 i = 0; i < num_horizontal_weights; i++) {
             float weight = horizontal_weights[i];
             uint32 src_x = src_width_start + i;
@@ -147,7 +183,7 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
             if (channel_count(pixel_format) == 3)
                 color3 += sample_3_channels(src->data + src_read_address) * weight;
             if (channel_count(pixel_format) == 4)
-                color4 += sample_4_channels(src->data + src_read_address) * weight;
+                accumulate_4_channels(color4, unweighted, sample_4_channels(src->data + src_read_address), weight, alpha_weighted);
         }
 
         uint64 scratch_write_address = (y * dst->width + x) * num_channels;
@@ -155,7 +191,7 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
         if (channel_count(pixel_format) == 3)
             clean_and_write_3_channels(color3, ctx->scratch_space + scratch_write_address);
         if (channel_count(pixel_format) == 4)
-            clean_and_write_4_channels(color4, ctx->scratch_space + scratch_write_address);
+            clean_and_write_4_channels(resolve_4_channels(color4, unweighted, alpha_weighted), ctx->scratch_space + scratch_write_address);
     }
     // Accumulate the scratch space data along the height
     // Downsamples the src_height X dst->width image to dst->height * dst->width
@@ -166,6 +202,7 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
         float* vertical_weights = vertical_weight_collection->values[y];
         float<3> color3 = {0.0f, 0.0f, 0.0f};
         float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
+        float<3> unweighted = {0.0f, 0.0f, 0.0f};
         for (uint32 i = 0; i < num_vertical_weights; i++) {
             float weight = vertical_weights[i];
             uint32 scratch_y = src_height_start + i;
@@ -174,7 +211,7 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
             if (channel_count(pixel_format) == 3)
                 color3 += sample_3_channels(ctx->scratch_space + scratch_read_address) * weight;
             if (channel_count(pixel_format) == 4)
-                color4 += sample_4_channels(ctx->scratch_space + scratch_read_address) * weight;
+                accumulate_4_channels(color4, unweighted, sample_4_channels(ctx->scratch_space + scratch_read_address), weight, alpha_weighted);
         }
 
         uint64 out_write_address = (y * dst->width + x) * dst->pixel_stride;
@@ -182,7 +219,7 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
         if (channel_count(pixel_format) == 3)
             clean_and_write_3_channels(color3, dst->data + out_write_address);
         if (channel_count(pixel_format) == 4)
-            clean_and_write_4_channels(color4, dst->data + out_write_address);
+            clean_and_write_4_channels(resolve_4_channels(color4, unweighted, alpha_weighted), dst->data + out_write_address);
     }
 }
 
@@ -190,13 +227,20 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
 export void resample_with_cached_weights_3(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx) {
     const uniform bool is_normal_map = false;
     assume(channel_count(pixel_format) == 3);
-    resample_with_cached_weights(src, dst, pixel_format, ctx);
+    resample_with_cached_weights(src, dst, pixel_format, ctx, false);
 }
 
 /// scratch_space must be at least src_height * dst->width pixels big
 export void resample_with_cached_weights_4(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx) {
     assume(channel_count(pixel_format) == 4);
-    resample_with_cached_weights(src, dst, pixel_format, ctx);
+    resample_with_cached_weights(src, dst, pixel_format, ctx, false);
+}
+
+/// Like `resample_with_cached_weights_4`, but weights rgb by alpha.
+/// scratch_space must be at least src_height * dst->width pixels big
+export void resample_with_cached_weights_4_alpha_weighted(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx) {
+    assume(channel_count(pixel_format) == 4);
+    resample_with_cached_weights(src, dst, pixel_format, ctx, true);
 }
 
 /// scratch_space must be at least src_height * dst->width pixels big
