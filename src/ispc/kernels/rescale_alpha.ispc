@@ -126,7 +126,7 @@ void apply_alpha_scale(uniform Image image, uniform float scale) {
     for (uint64 y = 0; y < image.size.y; y++) {
         for (uint64 x = 0; x < image.size.x; x++) {
             float original_alpha = get_alpha(image, x, y);
-            image.data[get_alpha_index(image, x, y)] = (uint8)min(255.0f, (float)original_alpha * scale * 255.0f);
+            image.data[get_alpha_index(image, x, y)] = (uint8)min(255.0f, original_alpha * scale * 255.0f + 0.5f);
         }
     }
 }
