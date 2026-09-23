@@ -334,8 +334,14 @@ fn resample(
     );
 
     // The new implementation needs a src_height * target_width intermediate buffer.
-    let mut scratch_space =
-        vec![0u8; (src.height * target_width * src.format.num_channel_in_memory() as u32) as usize];
+    // When alpha weighting, the kernel keeps 7 floats per texel: the alpha weighted rgb sum, the alpha sum and the
+    // unweighted rgb sum.
+    let scratch_channels = if alpha_weighted {
+        7
+    } else {
+        src.format.num_channel_in_memory()
+    };
+    let mut scratch_space = vec![0f32; (src.height * target_width) as usize * scratch_channels];
 
     // The kernel writes pixels `pixel_stride_in_bytes` apart, so the output must be sized by stride.
     let mut output = vec![0u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
