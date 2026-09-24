@@ -73,6 +73,18 @@ extern "C" {
         alpha_cutoff: *const f32,
     );
 }
+extern "C" {
+    pub fn alpha_coverage(width: u32, height: u32, data: *const u8, alpha_cutoff: *const f32) -> f64;
+}
+extern "C" {
+    pub fn scale_to_target_alpha_coverage(
+        width: u32,
+        height: u32,
+        data: *mut u8,
+        alpha_cutoff: *const f32,
+        target: f64,
+    );
+}
 pub const NormalMapFormat_R8g8b8: NormalMapFormat = 0;
 pub const NormalMapFormat_R8g8TangentSpaceReconstructedZ: NormalMapFormat = 1;
 pub type NormalMapFormat = ::std::os::raw::c_uint;

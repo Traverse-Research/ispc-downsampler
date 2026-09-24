@@ -39,7 +39,9 @@ fn compile_bindings() {
                 .allowlist_function("downsample_normal_map")
                 .allowlist_function("calculate_weights_lanczos")
                 .allowlist_function("calculate_weight_dimensions")
-                .allowlist_function("scale_to_alpha_coverage"),
+                .allowlist_function("scale_to_alpha_coverage")
+                .allowlist_function("alpha_coverage")
+                .allowlist_function("scale_to_target_alpha_coverage"),
         )
         .out_dir("src/ispc")
         .compile("downsample_ispc");

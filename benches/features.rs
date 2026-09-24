@@ -5,7 +5,8 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ispc_downsampler::{
     downsample, downsample_normal_map, downsample_normal_map_into, downsample_with_alpha_weighting,
-    downsample_with_custom_scale, scale_alpha_to_original_coverage, AlbedoFormat, Image,
+    downsample_with_custom_scale, generate_mips_into, generate_normal_mips_into, mip_layout,
+    scale_alpha_to_original_coverage, AlbedoFormat, AlphaCoverage, Image, MipOptions,
     NormalMapFormat,
 };
 use stb_image::image::{load, LoadResult};
@@ -291,6 +292,95 @@ fn mip_chains(c: &mut Criterion) {
                     Some(0.5),
                 )
             })
+        })
+    });
+    // The whole chain, level 0 included, into one reused buffer in the D3D12 upload layout.
+    let (levels, mips_size) = mip_layout(size, size, 4);
+    let mut mips = vec![0u8; mips_size];
+    let mips_cases = [
+        (
+            "rgb8_mips_into",
+            &rgb,
+            AlbedoFormat::Rgb8Unorm,
+            MipOptions::default(),
+        ),
+        (
+            "rgba8_mips_into",
+            &rgba,
+            AlbedoFormat::Rgba8Unorm,
+            MipOptions::default(),
+        ),
+        (
+            "srgba8_mips_into",
+            &rgba,
+            AlbedoFormat::Srgba8,
+            MipOptions::default(),
+        ),
+        (
+            "rgba8_alpha_weighted_mips_into",
+            &rgba,
+            AlbedoFormat::Rgba8Unorm,
+            MipOptions {
+                alpha_weighting: true,
+                ..Default::default()
+            },
+        ),
+        (
+            "rgba8_alpha_weighted_coverage_mips_into",
+            &rgba,
+            AlbedoFormat::Rgba8Unorm,
+            MipOptions {
+                alpha_weighting: true,
+                alpha_coverage: AlphaCoverage::Cutoff(0.5),
+                ..Default::default()
+            },
+        ),
+    ];
+    // What a cook does without it: chain the single-level calls, then copy every level (and the source) into the
+    // upload buffer.
+    group.bench_function("rgba8_chain_then_copy", |b| {
+        b.iter(|| {
+            let mut data = rgba.clone();
+            for (i, level) in levels.iter().enumerate() {
+                if i > 0 {
+                    let previous = &levels[i - 1];
+                    data = downsample(
+                        &Image::new(
+                            &data,
+                            previous.width,
+                            previous.height,
+                            AlbedoFormat::Rgba8Unorm,
+                        ),
+                        level.width,
+                        level.height,
+                    );
+                }
+                let row = level.width as usize * 4;
+                for (y, src) in data.chunks_exact(row).enumerate() {
+                    mips[level.offset + y * level.row_pitch..][..row].copy_from_slice(src);
+                }
+            }
+        })
+    });
+    for (name, data, format, options) in mips_cases {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                generate_mips_into(
+                    &Image::new(data, size, size, format),
+                    &levels,
+                    &mut mips,
+                    &options,
+                )
+            })
+        });
+    }
+    group.bench_function("normal_rgb8_mips_into", |b| {
+        b.iter(|| {
+            generate_normal_mips_into(
+                &Image::new(&rgb, size, size, NormalMapFormat::Rgb8),
+                &levels,
+                &mut mips,
+            )
         })
     });
     group.bench_function("normal_rgb8", |b| {

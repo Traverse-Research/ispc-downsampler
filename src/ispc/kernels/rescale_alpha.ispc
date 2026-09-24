@@ -221,25 +221,51 @@ void apply_alpha_scale(uniform Image image, uniform float scale) {
     }
 }
 
-export void scale_to_alpha_coverage(uniform uint32 source_width, uniform uint32 source_height, uniform const uint8 source_data[],
-    uniform uint32 downsampled_width, uniform uint32 downsampled_height, uniform uint8 downsampled_image_data[],
-    const uniform float* uniform alpha_cutoff) {
-    uniform Image source = { (uniform uint8*)source_data, {source_width, source_height} };
-    uniform Image downsampled = { downsampled_image_data, {downsampled_width, downsampled_height} };
-
-    uniform float scale;
+// Coverage of an image, the value `scale_to_coverage()` preserves: the fraction of visible subsamples with a cutoff,
+// the mean alpha without one.
+uniform double coverage(uniform Image image, const uniform float* uniform alpha_cutoff) {
     if (alpha_cutoff == NULL) {
         uniform double unused_slope;
-        scale = solve_scale_linear(downsampled, mean_alpha(source, 1.0f, unused_slope));
+        return mean_alpha(image, 1.0f, unused_slope);
+    }
+    return (uniform double)count_visible(image, 1.0f, *alpha_cutoff) / num_samples(image);
+}
+
+// Scales the alpha of `image` so its coverage matches `target`.
+void scale_to_coverage(uniform Image image, const uniform float* uniform alpha_cutoff, uniform double target) {
+    uniform float scale;
+    if (alpha_cutoff == NULL) {
+        scale = solve_scale_linear(image, target);
     } else {
         uniform float cutoff = *alpha_cutoff;
         // Alpha never exceeds 1 (or goes below 0), so no scale changes coverage for these cutoffs.
         if (cutoff >= 1.0f || cutoff < 0.0f)
             return;
-        uniform double coverage = (uniform double)count_visible(source, 1.0f, cutoff) / num_samples(source);
-        uniform uint64 target = (uniform uint64)(coverage * num_samples(downsampled) + 0.5);
-        scale = solve_scale_with_cutoff(downsampled, cutoff, target);
+        scale = solve_scale_with_cutoff(image, cutoff, (uniform uint64)(target * num_samples(image) + 0.5));
     }
     if (scale != 1.0f)
-        apply_alpha_scale(downsampled, scale);
+        apply_alpha_scale(image, scale);
+}
+
+export uniform double alpha_coverage(uniform uint32 width, uniform uint32 height, uniform const uint8 data[],
+    const uniform float* uniform alpha_cutoff) {
+    uniform Image image = { (uniform uint8*)data, {width, height} };
+    return coverage(image, alpha_cutoff);
+}
+
+export void scale_to_target_alpha_coverage(uniform uint32 width, uniform uint32 height, uniform uint8 data[],
+    const uniform float* uniform alpha_cutoff, uniform double target) {
+    uniform Image image = { data, {width, height} };
+    scale_to_coverage(image, alpha_cutoff, target);
+}
+
+export void scale_to_alpha_coverage(uniform uint32 source_width, uniform uint32 source_height, uniform const uint8 source_data[],
+    uniform uint32 downsampled_width, uniform uint32 downsampled_height, uniform uint8 downsampled_image_data[],
+    const uniform float* uniform alpha_cutoff) {
+    uniform Image source = { (uniform uint8*)source_data, {source_width, source_height} };
+    uniform Image downsampled = { downsampled_image_data, {downsampled_width, downsampled_height} };
+    // Cutoffs outside 0..1 are no-ops, and would count nothing.
+    if (alpha_cutoff != NULL && (*alpha_cutoff >= 1.0f || *alpha_cutoff < 0.0f))
+        return;
+    scale_to_coverage(downsampled, alpha_cutoff, coverage(source, alpha_cutoff));
 }

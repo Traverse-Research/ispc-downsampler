@@ -327,6 +327,32 @@ fn resample(
     filter_scale: f32,
     alpha_weighted: bool,
 ) -> Vec<u8> {
+    // The kernel writes pixels `pixel_stride_in_bytes` apart, so the output must be sized by stride.
+    let mut output = vec![0u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
+    let stride = src.pixel_stride_in_bytes;
+    resample_into(
+        src,
+        target_width,
+        target_height,
+        filter_scale,
+        alpha_weighted,
+        &mut output,
+        stride,
+    );
+    output
+}
+
+/// Writes `target_width * target_height` pixels `output_stride` bytes apart, without gaps between rows. Bytes
+/// past the format's channels are set to 0.
+fn resample_into(
+    src: &Image<'_, AlbedoFormat>,
+    target_width: u32,
+    target_height: u32,
+    filter_scale: f32,
+    alpha_weighted: bool,
+    output: &mut [u8],
+    output_stride: usize,
+) {
     assert!(src.format.pixel_size_in_bytes() <= src.pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
 
     let sample_weights = precompute_lanczos_weights(
@@ -364,8 +390,8 @@ fn resample(
         src_image.pixel_stride = channels as u32;
     }
 
-    // The kernel writes pixels `pixel_stride_in_bytes` apart, so the output must be sized by stride.
-    let mut output = vec![0u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
+    assert!(output.len() >= (target_width * target_height) as usize * output_stride);
+    assert!(output_stride >= channels && output_stride <= 8);
 
     let kernel = if src.format.num_channel_in_memory() == 3 {
         ispc::downsample_ispc::resample_with_cached_weights_3
@@ -382,7 +408,7 @@ fn resample(
                 width: target_width,
                 height: target_height,
                 data: output.as_mut_ptr(),
-                pixel_stride: src.pixel_stride_in_bytes as u32,
+                pixel_stride: output_stride as u32,
             },
             ispc::PixelFormat::from(src.format),
             &mut ispc::DownsamplingContext {
@@ -395,8 +421,6 @@ fn resample(
             },
         );
     }
-
-    output
 }
 
 /// Linear values quantized to 16 bits to 8-bit sRGB (IEC 61966-2-1), for the kernels' final write.
@@ -491,8 +515,9 @@ pub fn downsample_normal_map_into(
     );
     let output = &mut output[..output_size];
 
-    // Padding bytes the kernels do not write.
-    if src.pixel_stride_in_bytes > src.format.num_channel_in_memory() {
+    // Padding bytes the kernels do not write: they store 32 bits per pixel, with 255 in the unused bytes.
+    let stride = src.pixel_stride_in_bytes;
+    if stride > 4 || (stride == 3 && src.format == NormalMapFormat::Rg8TangentSpaceReconstructedZ) {
         output.fill(255);
     }
 
@@ -558,6 +583,282 @@ pub fn downsample_normal_map_into(
             },
         );
     }
+}
+
+/// Row pitch alignment of texture uploads, `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT`. Vulkan accepts the same layout.
+pub const MIP_ROW_PITCH_ALIGNMENT: usize = 256;
+/// Alignment of every mip level's offset, `D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT`.
+pub const MIP_PLACEMENT_ALIGNMENT: usize = 512;
+
+/// Where one mip level is stored in a buffer: `height` rows of `width` texels, `row_pitch` bytes apart, starting at
+/// `offset`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MipLevel {
+    pub offset: usize,
+    pub row_pitch: usize,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The full mip chain of a `width` x `height` texture, down to 1x1, laid out for upload like D3D12's
+/// `GetCopyableFootprints()`: rows aligned to [MIP_ROW_PITCH_ALIGNMENT], levels to [MIP_PLACEMENT_ALIGNMENT].
+/// Returns the levels and the total size of the buffer. Take a prefix of the levels for a shorter chain.
+pub fn mip_layout(width: u32, height: u32, bytes_per_texel: usize) -> (Vec<MipLevel>, usize) {
+    let align = |value: usize, alignment: usize| value.div_ceil(alignment) * alignment;
+    let count = 32 - width.max(height).max(1).leading_zeros();
+    let mut size = 0;
+    let levels = (0..count)
+        .map(|i| {
+            let (width, height) = ((width >> i).max(1), (height >> i).max(1));
+            let row_pitch = align(width as usize * bytes_per_texel, MIP_ROW_PITCH_ALIGNMENT);
+            let offset = align(size, MIP_PLACEMENT_ALIGNMENT);
+            size = offset + row_pitch * (height as usize - 1) + width as usize * bytes_per_texel;
+            MipLevel {
+                offset,
+                row_pitch,
+                width,
+                height,
+            }
+        })
+        .collect();
+    (levels, size)
+}
+
+/// How [generate_mips_into] keeps alpha coverage (see [scale_alpha_to_original_coverage]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AlphaCoverage {
+    /// Alpha is filtered like the colour.
+    Unchanged,
+    /// Every level keeps the mean alpha of the source.
+    Mean,
+    /// Every level keeps the fraction of the source that is above this alpha cutoff.
+    Cutoff(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MipOptions {
+    /// See [downsample_with_custom_scale].
+    pub filter_scale: f32,
+    /// See [downsample_with_alpha_weighting]. Needs an alpha channel.
+    pub alpha_weighting: bool,
+    /// Needs an alpha channel.
+    pub alpha_coverage: AlphaCoverage,
+}
+
+impl Default for MipOptions {
+    fn default() -> Self {
+        Self {
+            filter_scale: 3.0,
+            alpha_weighting: false,
+            alpha_coverage: AlphaCoverage::Unchanged,
+        }
+    }
+}
+
+/// Fills a mip chain: copies `src` into `levels[0]` as `texel`-byte texels (`pad` in the bytes past its channels)
+/// and calls `step(previous, level, output)` for every next level, with `previous` the level before as a tightly
+/// packed image and `output` the tightly packed pixels of `level`. Tightly packed levels are read and written in
+/// place; padded ones go through scratch memory.
+fn fill_mip_chain<F: ImagePixelFormat>(
+    src: &Image<'_, F>,
+    levels: &[MipLevel],
+    output: &mut [u8],
+    texel: usize,
+    pad: u8,
+    mut step: impl FnMut(&Image<'_, F>, &MipLevel, &mut [u8]),
+) {
+    let channels = src.format.num_channel_in_memory();
+    assert!(src.format.pixel_size_in_bytes() <= src.pixel_stride_in_bytes);
+    assert!(
+        levels
+            .first()
+            .is_some_and(|l| l.width == src.width && l.height == src.height),
+        "The first mip level must have the size of the source"
+    );
+    let size = |l: &MipLevel| (l.width * l.height) as usize * texel;
+    let mut end = 0;
+    for level in levels {
+        assert!(
+            level.offset >= end,
+            "Mip levels must be in order and not overlap"
+        );
+        assert!(level.row_pitch >= level.width as usize * texel);
+        end = level.offset
+            + level.row_pitch * (level.height as usize - 1)
+            + level.width as usize * texel;
+    }
+    assert!(
+        output.len() >= end,
+        "The output needs {end} bytes for these mip levels"
+    );
+    let tight = |l: &MipLevel| l.row_pitch == l.width as usize * texel;
+
+    let first = &levels[0];
+    let row = src.width as usize * texel;
+    let src_row = src.width as usize * src.pixel_stride_in_bytes;
+    for y in 0..src.height as usize {
+        let src_row = &src.pixels[y * src_row..][..src_row];
+        let dst_row = &mut output[first.offset + y * first.row_pitch..][..row];
+        if src.pixel_stride_in_bytes == texel && channels == texel {
+            dst_row.copy_from_slice(src_row);
+        } else if channels == 3 && texel == 4 {
+            // Fixed-size chunks, which the compiler vectorises.
+            let pixels = src_row.chunks_exact(src.pixel_stride_in_bytes);
+            for (dst, pixel) in dst_row.chunks_exact_mut(4).zip(pixels) {
+                dst.copy_from_slice(&[pixel[0], pixel[1], pixel[2], pad]);
+            }
+        } else {
+            for (dst, pixel) in dst_row
+                .chunks_exact_mut(texel)
+                .zip(src_row.chunks(src.pixel_stride_in_bytes))
+            {
+                dst[..channels].copy_from_slice(&pixel[..channels]);
+                dst[channels..].fill(pad);
+            }
+        }
+    }
+
+    let largest = levels.iter().map(size).max().unwrap_or(0);
+    let mut scratch = [vec![0u8; largest], vec![0u8; largest]];
+    let mut previous_in_scratch = !tight(first);
+    if previous_in_scratch {
+        for y in 0..first.height as usize {
+            scratch[0][y * row..][..row]
+                .copy_from_slice(&output[first.offset + y * first.row_pitch..][..row]);
+        }
+    }
+
+    for pair in levels.windows(2) {
+        let (previous, level) = (&pair[0], &pair[1]);
+        let (head, tail) = output.split_at_mut(level.offset);
+        let [scratch_previous, scratch_current] = &mut scratch;
+        let previous_pixels: &[u8] = if previous_in_scratch {
+            &scratch_previous[..size(previous)]
+        } else {
+            &head[previous.offset..][..size(previous)]
+        };
+        let image = Image::new_with_pixel_stride(
+            previous_pixels,
+            previous.width,
+            previous.height,
+            src.format,
+            texel,
+        );
+        if tight(level) {
+            step(&image, level, &mut tail[..size(level)]);
+            previous_in_scratch = false;
+        } else {
+            let current = &mut scratch_current[..size(level)];
+            step(&image, level, current);
+            let row = level.width as usize * texel;
+            for (y, src) in current.chunks_exact(row).enumerate() {
+                tail[y * level.row_pitch..][..row].copy_from_slice(src);
+            }
+            scratch.swap(0, 1);
+            previous_in_scratch = true;
+        }
+    }
+}
+
+/// Generates every level of a mip chain in one buffer laid out like [mip_layout]: `levels[0]` gets a copy of
+/// `src`, and every next level is downsampled from the one before. Texels are 4 bytes, the layout of
+/// `DXGI_FORMAT_R8G8B8A8_*` and `VK_FORMAT_R8G8B8A8_*`, with alpha 255 for formats without alpha.
+///
+/// Faster than downsampling level by level: it writes straight into the (upload) buffer rather than allocating
+/// every level, and measures the alpha coverage of the source only once.
+pub fn generate_mips_into(
+    src: &Image<'_, AlbedoFormat>,
+    levels: &[MipLevel],
+    output: &mut [u8],
+    options: &MipOptions,
+) {
+    let has_alpha = src.format.num_channel_in_memory() == 4;
+    assert!(
+        has_alpha
+            || (!options.alpha_weighting && options.alpha_coverage == AlphaCoverage::Unchanged),
+        "Alpha weighting and coverage need an alpha channel"
+    );
+    let rgba_format = match src.format {
+        AlbedoFormat::Rgb8Unorm => AlbedoFormat::Rgba8Unorm,
+        AlbedoFormat::Rgb8Snorm => AlbedoFormat::Rgba8Snorm,
+        AlbedoFormat::Srgb8 => AlbedoFormat::Srgba8,
+        format => format,
+    };
+    let cutoff = match options.alpha_coverage {
+        AlphaCoverage::Cutoff(cutoff) => Some(cutoff),
+        _ => None,
+    };
+    let cutoff = cutoff
+        .as_ref()
+        .map_or(std::ptr::null(), |c| c as *const f32);
+    // Coverage of the source, which every level keeps; measured on the first step.
+    let mut target_coverage = None;
+
+    fill_mip_chain(src, levels, output, 4, 255, |previous, level, output| {
+        if options.alpha_coverage != AlphaCoverage::Unchanged && target_coverage.is_none() {
+            target_coverage = Some(unsafe {
+                ispc::downsample_ispc::alpha_coverage(
+                    previous.width,
+                    previous.height,
+                    previous.pixels.as_ptr(),
+                    cutoff,
+                )
+            });
+        }
+        // Levels after the first are RGBA with opaque alpha, which the 4-channel kernels (faster than 3 channels
+        // with a pixel stride) keep at exactly 255.
+        let previous = &Image::new(
+            previous.pixels,
+            previous.width,
+            previous.height,
+            rgba_format,
+        );
+        resample_into(
+            previous,
+            level.width,
+            level.height,
+            options.filter_scale,
+            options.alpha_weighting,
+            output,
+            4,
+        );
+        if let Some(target) = target_coverage {
+            unsafe {
+                ispc::downsample_ispc::scale_to_target_alpha_coverage(
+                    level.width,
+                    level.height,
+                    output.as_mut_ptr(),
+                    cutoff,
+                    target,
+                );
+            }
+        }
+    });
+}
+
+/// Version of [generate_mips_into] for normal maps, see [downsample_normal_map]. Texels are 4 bytes for
+/// [NormalMapFormat::Rgb8] (`R8G8B8A8`, with 255 in the 4th byte) and 2 bytes for
+/// [NormalMapFormat::Rg8TangentSpaceReconstructedZ] (`R8G8`).
+pub fn generate_normal_mips_into(
+    src: &Image<'_, NormalMapFormat>,
+    levels: &[MipLevel],
+    output: &mut [u8],
+) {
+    let texel = if src.format == NormalMapFormat::Rgb8 {
+        4
+    } else {
+        2
+    };
+    fill_mip_chain(
+        src,
+        levels,
+        output,
+        texel,
+        255,
+        |previous, level, output| {
+            downsample_normal_map_into(previous, level.width, level.height, output)
+        },
+    );
 }
 
 #[cfg(test)]
