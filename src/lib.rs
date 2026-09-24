@@ -459,14 +459,42 @@ fn box_weights(src: u32, target: u32) -> Vec<CachedWeight> {
 /// Uses a box filter instead of a lanczos filter, and normalizes each pixel to preserve unit length for the normals after downsampling.
 ///
 /// Returns a `Vec` with the downsampled data. If `normal_map_format.pixel_size() < pixel_stride_in_bytes`, the `Vec` will contain more values than channels than the format has specified, with all pixels in them initialized to 255.
+///
+/// See [downsample_normal_map_into] to write into an existing buffer instead.
 pub fn downsample_normal_map(
     src: &Image<'_, NormalMapFormat>,
     target_width: u32,
     target_height: u32,
 ) -> Vec<u8> {
-    assert!(src.format.pixel_size_in_bytes() <= src.pixel_stride_in_bytes, "The pixel stride in bytes must be more or equal than the size of a single pixel as described by the format of the normal map.");
+    let mut data = vec![0u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
+    downsample_normal_map_into(src, target_width, target_height, &mut data);
+    data
+}
 
-    let mut data = vec![255u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
+/// Version of [downsample_normal_map] that writes into `output` rather than allocating: `target_width *
+/// target_height` pixels of `pixel_stride_in_bytes` each, the same layout as the source. Padding bytes are set
+/// to 255.
+///
+/// Reusing one buffer for many calls (like every level of a mip chain) avoids allocating fresh memory every time,
+/// which for large outputs costs about as much as downsampling itself.
+pub fn downsample_normal_map_into(
+    src: &Image<'_, NormalMapFormat>,
+    target_width: u32,
+    target_height: u32,
+    output: &mut [u8],
+) {
+    assert!(src.format.pixel_size_in_bytes() <= src.pixel_stride_in_bytes, "The pixel stride in bytes must be more or equal than the size of a single pixel as described by the format of the normal map.");
+    let output_size = (target_width * target_height) as usize * src.pixel_stride_in_bytes;
+    assert!(
+        output.len() >= output_size,
+        "The output needs {output_size} bytes for {target_width}x{target_height} pixels"
+    );
+    let output = &mut output[..output_size];
+
+    // Padding bytes the kernels do not write.
+    if src.pixel_stride_in_bytes > src.format.num_channel_in_memory() {
+        output.fill(255);
+    }
 
     // Rgb8 is read with its pixel stride (up to 8 bytes, the rest is padding); Rg8 needs to be packed.
     let channels = src.format.num_channel_in_memory();
@@ -482,13 +510,26 @@ pub fn downsample_normal_map(
         (src.pixels, stride)
     };
 
-    let width_weights = WeightCollection::new(box_weights(src.width, target_width));
-    let height_weights = if src.width == src.height && target_width == target_height {
-        width_weights.clone()
-    } else {
-        WeightCollection::new(box_weights(src.height, target_height))
-    };
-    let weights = ispc::Weights::new(width_weights, height_weights);
+    // Exact 2:1 of these layouts (every mip level of a power of two texture) has a dedicated kernel that does not
+    // use the weights, so skip building them.
+    let exact_2x2 = src.width == 2 * target_width
+        && src.height == 2 * target_height
+        && matches!(
+            (src.format, stride),
+            (NormalMapFormat::Rgb8, 3)
+                | (NormalMapFormat::Rgb8, 4)
+                | (NormalMapFormat::Rg8TangentSpaceReconstructedZ, 2)
+        )
+        && stride == src.pixel_stride_in_bytes;
+    let weights = (!exact_2x2).then(|| {
+        let width_weights = WeightCollection::new(box_weights(src.width, target_width));
+        let height_weights = if src.width == src.height && target_width == target_height {
+            width_weights.clone()
+        } else {
+            WeightCollection::new(box_weights(src.height, target_height))
+        };
+        ispc::Weights::new(width_weights, height_weights)
+    });
 
     unsafe {
         ispc::downsample_normal_map(
@@ -501,18 +542,22 @@ pub fn downsample_normal_map(
             &mut ispc::DownsampledImage {
                 width: target_width,
                 height: target_height,
-                data: data.as_mut_ptr(),
+                data: output.as_mut_ptr(),
                 pixel_stride: src.pixel_stride_in_bytes as u32,
             },
             ispc::NormalMapFormat::from(src.format),
             &mut ispc::DownsamplingContext {
-                weights: *weights.ispc_representation(),
+                weights: weights.as_ref().map_or(
+                    ispc::SampleWeights {
+                        vertical_weights: std::ptr::null(),
+                        horizontal_weights: std::ptr::null(),
+                    },
+                    |weights| *weights.ispc_representation(),
+                ),
                 srgb_encode: std::ptr::null(),
             },
         );
     }
-
-    data
 }
 
 #[cfg(test)]

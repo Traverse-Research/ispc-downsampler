@@ -31,6 +31,9 @@ fn main() {
         size / 2,
     );
 
+    // Reused output for the `_into` workloads, big enough for every format.
+    let normal_out = std::cell::RefCell::new(vec![0u8; (size / 2 * size / 2 * 3) as usize]);
+
     type Workload<'a> = (&'static str, Box<dyn Fn() + 'a>);
     let workloads: Vec<Workload> = vec![
         (
@@ -118,6 +121,37 @@ fn main() {
                     size / 2,
                     size / 2,
                 ));
+            }),
+        ),
+        (
+            "normal_rgb8_into",
+            Box::new(|| {
+                let mut out = normal_out.borrow_mut();
+                downsample_normal_map_into(
+                    &Image::new(&rgb, size, size, NormalMapFormat::Rgb8),
+                    size / 2,
+                    size / 2,
+                    &mut out,
+                );
+                black_box(&out);
+            }),
+        ),
+        (
+            "normal_rg8_into",
+            Box::new(|| {
+                let mut out = normal_out.borrow_mut();
+                downsample_normal_map_into(
+                    &Image::new(
+                        &rg,
+                        size,
+                        size,
+                        NormalMapFormat::Rg8TangentSpaceReconstructedZ,
+                    ),
+                    size / 2,
+                    size / 2,
+                    &mut out,
+                );
+                black_box(&out);
             }),
         ),
         (
