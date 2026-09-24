@@ -671,14 +671,22 @@ inline void rgb8_pair_sums(const uniform int32 rows[], uniform uint32 x0, float&
     z = decode_snorm8(int_to_float(shuffle(ab, bb, even) + shuffle(ab, bb, odd)) * 0.25f);
 }
 
-// RGBX: the two texels of an output texel in a row are one 64-bit word, `top` and `bottom`. Channels are summed
-// two at a time in 16-bit fields of 32-bit lanes (4 texels never exceed 1020).
-inline void rgbx8_pair_sums(uint64 top, uint64 bottom, float& x, float& y, float& z) {
-    uint32 t0 = (uint32)top, t1 = (uint32)(top >> 32), b0 = (uint32)bottom, b1 = (uint32)(bottom >> 32);
-    uint32 xz = (t0 & 0x00FF00FF) + (t1 & 0x00FF00FF) + (b0 & 0x00FF00FF) + (b1 & 0x00FF00FF);
-    uint32 y_ = ((t0 >> 8) & 0xFF) + ((t1 >> 8) & 0xFF) + ((b0 >> 8) & 0xFF) + ((b1 >> 8) & 0xFF);
+// RGBX: texels in 32-bit lanes, `t0`/`b0` texels 0..programCount-1 of the top/bottom row and `t1`/`b1` the next.
+// Rows are summed first, per channel two at a time in 16-bit fields (4 texels never exceed 1020), then adjacent
+// texels are paired with an in-lane swap. Only compacting the even lanes crosses 128-bit lanes: cross-lane permutes
+// run on few pipes on some CPUs (Zen 2), so they are kept to a minimum.
+inline void rgbx8_pair_sums(uint32 t0, uint32 t1, uint32 b0, uint32 b1, float& x, float& y, float& z) {
+    int swap = programIndex ^ 1, even = 2 * programIndex;
+    // [x z] and [y a] fields of both rows, then of both texels of each pair (valid in even lanes).
+    uint32 xz0 = (t0 & 0x00FF00FF) + (b0 & 0x00FF00FF), xz1 = (t1 & 0x00FF00FF) + (b1 & 0x00FF00FF);
+    uint32 ya0 = ((t0 >> 8) & 0x00FF00FF) + ((b0 >> 8) & 0x00FF00FF), ya1 = ((t1 >> 8) & 0x00FF00FF) + ((b1 >> 8) & 0x00FF00FF);
+    xz0 += shuffle((int32)xz0, swap);
+    xz1 += shuffle((int32)xz1, swap);
+    ya0 += shuffle((int32)ya0, swap);
+    ya1 += shuffle((int32)ya1, swap);
+    uint32 xz = shuffle((int32)xz0, (int32)xz1, even), ya = shuffle((int32)ya0, (int32)ya1, even);
     x = decode_snorm8(int_to_float(xz & 0xFFFF) * 0.25f);
-    y = decode_snorm8(int_to_float(y_) * 0.25f);
+    y = decode_snorm8(int_to_float(ya & 0xFFFF) * 0.25f);
     z = decode_snorm8(int_to_float(xz >> 16) * 0.25f);
 }
 
@@ -699,12 +707,13 @@ inline void rg8_pair_sums(uint32 top, uint32 bottom, float& x, float& y, float& 
     z = 0.5f * cz0 + 0.5f * cz1;
 }
 
-// Packed Rgb8, 2 * programCount output texels (96 source bytes per row) at a time, in 32-bit lanes without byte
-// shuffles: every lane takes 12 source bytes (4 texels, 2 output texels) as three words, splits them into even and
-// odd bytes in 16-bit fields, and sums both rows and both texels of each output texel with a few masks and adds.
-// Writes the 6 output bytes of every lane contiguously.
-inline void rgb8_2x2_group(const uniform uint8* uniform top, const uniform uint8* uniform bottom,
-    uniform uint8* uniform out, uniform int32 halves[]) {
+// Packed Rgb8 in 32-bit lanes without byte shuffles: every lane takes 12 source bytes (4 texels, 2 output texels)
+// as three words, splits them into even and odd bytes in 16-bit fields, and sums both rows and both texels of each
+// output texel with a few masks and adds. Writes the normals of the lane's even and odd output texel (the averages
+// decoded to snorm, the same arithmetic as the box path; the 0.25 is exact) to `even` and `odd`, x y z planes
+// `plane` floats apart.
+inline void rgb8_2x2_sums(const uniform uint8* uniform top, const uniform uint8* uniform bottom,
+    uniform float even[], uniform float odd[], uniform uint32 plane) {
     // Words w0 = [r0 g0 b0 r1], w1 = [g1 b1 r2 g2], w2 = [b2 r3 g3 b3], lowest byte first.
     int32 t0, t1, t2, u0, u1, u2;
     aos_to_soa3((uniform int32* uniform)top, &t0, &t1, &t2);
@@ -714,19 +723,12 @@ inline void rgb8_2x2_group(const uniform uint8* uniform top, const uniform uint8
     uint32 e1 = (t1 & 0x00FF00FF) + (u1 & 0x00FF00FF), o1 = ((t1 >> 8) & 0x00FF00FF) + ((u1 >> 8) & 0x00FF00FF);
     uint32 e2 = (t2 & 0x00FF00FF) + (u2 & 0x00FF00FF), o2 = ((t2 >> 8) & 0x00FF00FF) + ((u2 >> 8) & 0x00FF00FF);
     // e0 = [r0 b0], o0 = [g0 r1], e1 = [g1 r2], o1 = [b1 g2], e2 = [b2 g3], o2 = [r3 b3].
-    int32 ra = (e0 & 0xFFFF) + (o0 >> 16), ga = (o0 & 0xFFFF) + (e1 & 0xFFFF), ba = (e0 >> 16) + (o1 & 0xFFFF);
-    int32 rb = (e1 >> 16) + (o2 & 0xFFFF), gb = (o1 >> 16) + (e2 >> 16), bb = (e2 & 0xFFFF) + (o2 >> 16);
-    // Averages decoded to snorm, the same arithmetic as the box path (the 0.25 is exact).
-    uint32 a = pack_normal(decode_snorm8(int_to_float(ra) * 0.25f), decode_snorm8(int_to_float(ga) * 0.25f),
-        decode_snorm8(int_to_float(ba) * 0.25f));
-    uint32 b = pack_normal(decode_snorm8(int_to_float(rb) * 0.25f), decode_snorm8(int_to_float(gb) * 0.25f),
-        decode_snorm8(int_to_float(bb) * 0.25f));
-    // [ra ga ba rb gb bb] as three 16-bit halves per lane, interleaved and stored contiguously.
-    soa_to_aos3((int32)(a & 0xFFFF), (int32)((a >> 16) | ((b & 0xFF) << 8)), (int32)(b >> 8), halves);
-    uniform uint16* uniform out16 = (uniform uint16* uniform)out;
-    for (uniform int i = 0; i < 3; i++) {
-        out16[i * programCount + programIndex] = (uint16)halves[i * programCount + programIndex];
-    }
+    even[programIndex] = decode_snorm8(int_to_float((e0 & 0xFFFF) + (o0 >> 16)) * 0.25f);
+    even[plane + programIndex] = decode_snorm8(int_to_float((o0 & 0xFFFF) + (e1 & 0xFFFF)) * 0.25f);
+    even[2 * plane + programIndex] = decode_snorm8(int_to_float((e0 >> 16) + (o1 & 0xFFFF)) * 0.25f);
+    odd[programIndex] = decode_snorm8(int_to_float((e1 >> 16) + (o2 & 0xFFFF)) * 0.25f);
+    odd[plane + programIndex] = decode_snorm8(int_to_float((o1 >> 16) + (e2 >> 16)) * 0.25f);
+    odd[2 * plane + programIndex] = decode_snorm8(int_to_float((e2 & 0xFFFF) + (o2 >> 16)) * 0.25f);
 }
 
 inline void normal_map_2x2(const uniform SourceImage* uniform src, uniform DownsampledImage* uniform dst,
@@ -745,6 +747,10 @@ inline void normal_map_2x2(const uniform SourceImage* uniform src, uniform Downs
         rows[i] = 0;
     }
     uniform int32 bytes[3 * programCount];
+    // Rgb8: per-lane normals and packed results of the whole groups of a row.
+    uniform float* uniform pair_normals = uniform new uniform float[6 * (width / 2 + programCount)];
+    uniform uint32* uniform packed_even = uniform new uniform uint32[width / 2 + programCount];
+    uniform uint32* uniform packed_odd = uniform new uniform uint32[width / 2 + programCount];
     // Whole vectors of output texels, and the rest.
     uniform uint32 whole = width / programCount * programCount;
 
@@ -754,11 +760,31 @@ inline void normal_map_2x2(const uniform SourceImage* uniform src, uniform Downs
         uniform uint8* uniform out = dst->data + (uint64)yo * width * pixel_size;
 
         if (normal_map_format == R8g8b8 && stride == 3) {
-            // Whole groups straight to the output, the rest through the row sums below.
+            // Whole groups of 2 * programCount output texels, in three short loops over the row rather than one
+            // long chain per group, which the core cannot overlap with the next: sums, normalize and pack, and
+            // interleave and store. The rest goes through the row sums below.
             uniform uint32 groups = width / (2 * programCount);
+            uniform uint32 lanes = groups * programCount;
+            // Planar x y z of the even and odd output texels of every lane.
+            uniform float* uniform even = pair_normals;
+            uniform float* uniform odd = pair_normals + 3 * lanes;
             for (uniform uint32 g = 0; g < groups; g++) {
-                // 4 source texels (12 bytes) per lane in, 2 output texels (6 bytes) per lane out.
-                rgb8_2x2_group(top + g * 12 * programCount, bottom + g * 12 * programCount, out + g * 6 * programCount, bytes);
+                rgb8_2x2_sums(top + g * 12 * programCount, bottom + g * 12 * programCount,
+                    even + g * programCount, odd + g * programCount, lanes);
+            }
+            for (uniform uint32 i = 0; i < lanes; i += programCount) {
+                uint32 j = i + programIndex;
+                packed_even[j] = pack_normal(even[j], even[lanes + j], even[2 * lanes + j]);
+                packed_odd[j] = pack_normal(odd[j], odd[lanes + j], odd[2 * lanes + j]);
+            }
+            uniform uint16* uniform out16 = (uniform uint16* uniform)out;
+            for (uniform uint32 i = 0; i < lanes; i += programCount) {
+                // [xa ya za xb yb zb] of every lane as three 16-bit halves, interleaved and stored contiguously.
+                uint32 a = packed_even[i + programIndex], b = packed_odd[i + programIndex];
+                soa_to_aos3((int32)(a & 0xFFFF), (int32)((a >> 16) | ((b & 0xFF) << 8)), (int32)(b >> 8), bytes);
+                for (uniform int k = 0; k < 3; k++) {
+                    out16[3 * i + k * programCount + programIndex] = (uint16)bytes[k * programCount + programIndex];
+                }
             }
             uniform uint32 done = groups * 2 * programCount;
             if (done == width)
@@ -784,25 +810,31 @@ inline void normal_map_2x2(const uniform SourceImage* uniform src, uniform Downs
             }
             continue;
         } else if (normal_map_format == R8g8b8) {
-            // One 64-bit word per output texel and row: its two texels.
-            const uniform uint64* uniform top64 = (const uniform uint64*)top;
-            const uniform uint64* uniform bottom64 = (const uniform uint64*)bottom;
+            const uniform uint32* uniform top32 = (const uniform uint32*)top;
+            const uniform uint32* uniform bottom32 = (const uniform uint32*)bottom;
             uniform uint32 x0 = 0;
             for (; x0 < whole; x0 += programCount) {
+                uniform uint32 texel = 2 * x0;
                 float x, y, z;
-                rgbx8_pair_sums(top64[x0 + programIndex], bottom64[x0 + programIndex], x, y, z);
+                rgbx8_pair_sums(top32[texel + programIndex], top32[texel + programCount + programIndex],
+                    bottom32[texel + programIndex], bottom32[texel + programCount + programIndex], x, y, z);
                 sx[x0 + programIndex] = x;
                 sy[x0 + programIndex] = y;
                 sz[x0 + programIndex] = z;
             }
             if (x0 < width) {
-                uint64 t = 0, u = 0;
-                if (x0 + programIndex < width) {
-                    t = top64[x0 + programIndex];
-                    u = bottom64[x0 + programIndex];
+                uint32 t0 = 0, t1 = 0, b0 = 0, b1 = 0;
+                int first = 2 * x0 + programIndex, second = 2 * x0 + programCount + programIndex;
+                if (first < src->width) {
+                    t0 = top32[first];
+                    b0 = bottom32[first];
+                }
+                if (second < src->width) {
+                    t1 = top32[second];
+                    b1 = bottom32[second];
                 }
                 float x, y, z;
-                rgbx8_pair_sums(t, u, x, y, z);
+                rgbx8_pair_sums(t0, t1, b0, b1, x, y, z);
                 sx[x0 + programIndex] = x;
                 sy[x0 + programIndex] = y;
                 sz[x0 + programIndex] = z;
@@ -845,6 +877,9 @@ inline void normal_map_2x2(const uniform SourceImage* uniform src, uniform Downs
     }
     delete[] sums;
     delete[] rows;
+    delete[] pair_normals;
+    delete[] packed_even;
+    delete[] packed_odd;
 }
 
 export void downsample_normal_map(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform NormalMapFormat normal_map_format, uniform DownsamplingContext * uniform ctx) {
