@@ -16,18 +16,16 @@ uniform float calculate_scaled_alpha_coverage(uniform Image image, const uniform
     // Don't perform subsampling if the image dimensions don't allow for it
     if (image.size.x == 1 || image.size.y == 1) {
         float coverage = 0.0f;
-        for (uint64 x = 0; x < image.size.x; x++) {
-            for (uint64 y = 0; y < image.size.y; y++) {
-                float alpha = min((get_alpha(image, x, y) * scale), 1.0);
+        foreach (x = 0 ... image.size.x, y = 0 ... image.size.y) {
+            float alpha = min((get_alpha(image, x, y) * scale), 1.0);
 
-                if (alpha_cutoff) {
-                    if (alpha > *alpha_cutoff) {
-                        coverage += 1.0f;
-                    }
+            if (alpha_cutoff) {
+                if (alpha > *alpha_cutoff) {
+                    coverage += 1.0f;
                 }
-                else {
-                    coverage += alpha;
-                }
+            }
+            else {
+                coverage += alpha;
             }
         }
         return reduce_add(coverage) / (float)((image.size.x) * (image.size.y));
@@ -36,35 +34,33 @@ uniform float calculate_scaled_alpha_coverage(uniform Image image, const uniform
         float coverage = 0.0f;
         const uniform int subsample_factor = 4;
 
-        for (uint64 x = 0; x < image.size.x - 1; x++) {
-            for (uint64 y = 0; y < image.size.y - 1; y++) {
-                float top_left = min((get_alpha(image, x, y) * scale), 1.0);
-                float top_right = min((get_alpha(image, x + 1, y) * scale), 1.0);
-                float bottom_left = min((get_alpha(image, x, y + 1) * scale), 1.0);
-                float bottom_right = min((get_alpha(image, x + 1, y + 1) * scale), 1.0);
+        foreach (x = 0 ... image.size.x - 1, y = 0 ... image.size.y - 1) {
+            float top_left = min((get_alpha(image, x, y) * scale), 1.0);
+            float top_right = min((get_alpha(image, x + 1, y) * scale), 1.0);
+            float bottom_left = min((get_alpha(image, x, y + 1) * scale), 1.0);
+            float bottom_right = min((get_alpha(image, x + 1, y + 1) * scale), 1.0);
 
-                float texel_coverage = 0.0;
-                for (int sy = 0; sy < subsample_factor; sy++) {
-                    float fy = ((float)sy + 0.5) / (float)subsample_factor;
-                    for (int sx = 0; sx < subsample_factor; sx++) {
-                        float fx = ((float)sx + 0.5) / (float)subsample_factor;
-                        float alpha = top_left * (1.0 - fx) * (1.0 - fy)
-                            + top_right * fx * (1.0 - fy)
-                            + bottom_left * (1.0 - fx) * fy
-                            + bottom_right * fx * fy;
+            float texel_coverage = 0.0;
+            for (uniform int sy = 0; sy < subsample_factor; sy++) {
+                uniform float fy = ((uniform float)sy + 0.5) / (uniform float)subsample_factor;
+                for (uniform int sx = 0; sx < subsample_factor; sx++) {
+                    uniform float fx = ((uniform float)sx + 0.5) / (uniform float)subsample_factor;
+                    float alpha = top_left * (1.0 - fx) * (1.0 - fy)
+                        + top_right * fx * (1.0 - fy)
+                        + bottom_left * (1.0 - fx) * fy
+                        + bottom_right * fx * fy;
 
-                        if (alpha_cutoff) {
-                            if (alpha > *alpha_cutoff) {
-                                texel_coverage += 1.0;
-                            }
-                        }
-                        else {
-                            texel_coverage += alpha;
+                    if (alpha_cutoff) {
+                        if (alpha > *alpha_cutoff) {
+                            texel_coverage += 1.0;
                         }
                     }
+                    else {
+                        texel_coverage += alpha;
+                    }
                 }
-                coverage += texel_coverage / (float)(subsample_factor * subsample_factor);
             }
+            coverage += texel_coverage / (float)(subsample_factor * subsample_factor);
         }
 
         return reduce_add(coverage) / (float)((image.size.x - 1) * (image.size.y - 1));
@@ -101,7 +97,7 @@ uniform float find_alpha_scale_for_coverage(uniform Image image, uniform float d
 
     // 10-step binary search for the alpha multiplier that best matches
     // the desired alpha coverage
-    for (int i = 0; i < 10; i++) {
+    for (uniform int i = 0; i < 10; i++) {
         uniform float current_coverage = calculate_scaled_alpha_coverage(image, alpha_cutoff, alpha_scale);
         uniform float coverage_diff = current_coverage - desired_coverage;
 
@@ -123,11 +119,9 @@ uniform float find_alpha_scale_for_coverage(uniform Image image, uniform float d
 }
 
 void apply_alpha_scale(uniform Image image, uniform float scale) {
-    for (uint64 y = 0; y < image.size.y; y++) {
-        for (uint64 x = 0; x < image.size.x; x++) {
-            float original_alpha = get_alpha(image, x, y);
-            image.data[get_alpha_index(image, x, y)] = (uint8)min(255.0f, original_alpha * scale * 255.0f + 0.5f);
-        }
+    foreach (y = 0 ... image.size.y, x = 0 ... image.size.x) {
+        float original_alpha = get_alpha(image, x, y);
+        image.data[get_alpha_index(image, x, y)] = (uint8)min(255.0f, original_alpha * scale * 255.0f + 0.5f);
     }
 }
 
