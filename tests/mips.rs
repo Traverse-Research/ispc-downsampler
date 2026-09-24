@@ -159,9 +159,17 @@ fn mips_match_chained_downsampling() {
                 write_level(&mut output, &levels[0], 4, &rgba);
                 generate_mips(&mut output, &levels, format, options);
                 let reference = reference_chain(&rgba, &levels, format, options);
+                // sRGB levels after the first are filtered from the previous level's linear value rather than its
+                // rounded sRGB bytes, so they may differ from the chained calls by one step (see
+                // `srgb_mips_do_not_drift` for which is right).
+                let srgb = matches!(format, AlbedoFormat::Srgb8 | AlbedoFormat::Srgba8);
                 for (i, (level, expected)) in levels.iter().zip(&reference).enumerate() {
+                    let got = read_level(&output, level, 4);
+                    let tolerance = if srgb && i > 1 { 1 } else { 0 };
                     assert!(
-                        read_level(&output, level, 4) == *expected,
+                        got.iter()
+                            .zip(expected)
+                            .all(|(a, b)| a.abs_diff(*b) <= tolerance),
                         "{format:?} {width}x{height} {options:?}: level {i} differs"
                     );
                 }
@@ -220,4 +228,168 @@ fn mips_too_small_panics() {
         AlbedoFormat::Rgba8Unorm,
         &MipOptions::default(),
     );
+}
+
+fn srgb_to_linear(v: u8) -> f64 {
+    let s = v as f64 / 255.0;
+    if s <= 0.04045 {
+        s / 12.92
+    } else {
+        ((s + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(l: f64) -> f64 {
+    let l = l.clamp(0.0, 1.0);
+    255.0
+        * if l <= 0.0031308 {
+            l * 12.92
+        } else {
+            1.055 * l.powf(1.0 / 2.4) - 0.055
+        }
+}
+
+/// The library's Lanczos weights for `src` to `target` texels (filter scale 3), in f64: (first texel, weights).
+fn lanczos_weights(src: usize, target: usize) -> Vec<(usize, Vec<f64>)> {
+    let sinc = |x: f64| {
+        if x.abs() < 1e-9 {
+            1.0
+        } else {
+            (x * std::f64::consts::PI).sin() / (x * std::f64::consts::PI)
+        }
+    };
+    let ratio = src as f64 / target as f64;
+    let radius = (ratio * 3.0).ceil();
+    (0..target)
+        .map(|p| {
+            let center = (p as f64 + 0.5) * ratio - 0.5;
+            let start = ((center - radius).ceil().max(0.0) as usize).min(src - 1);
+            let end = ((center + radius).floor().max(0.0) as usize)
+                .min(src - 1)
+                .max(start);
+            let w: Vec<f64> = (start..=end)
+                .map(|i| {
+                    let t = ((i as f64 - center) / ratio).abs();
+                    if t < 3.0 {
+                        sinc(t) * sinc(t / 3.0)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            let sum: f64 = w.iter().sum();
+            (start, w.iter().map(|w| w / sum).collect())
+        })
+        .collect()
+}
+
+/// One 2:1 Lanczos step of linear rgb planes in f64, clamped like the library clamps every level.
+fn float_step(src: &[[f64; 3]], size: usize) -> Vec<[f64; 3]> {
+    let weights = lanczos_weights(size, size / 2);
+    let half = size / 2;
+    let mut vertical = vec![[0.0; 3]; half * size];
+    for (y, (start, w)) in weights.iter().enumerate() {
+        for x in 0..size {
+            for (i, wi) in w.iter().enumerate() {
+                for c in 0..3 {
+                    vertical[y * size + x][c] += wi * src[(start + i) * size + x][c];
+                }
+            }
+        }
+    }
+    let mut out = vec![[0.0; 3]; half * half];
+    for y in 0..half {
+        for (x, (start, w)) in weights.iter().enumerate() {
+            for (i, wi) in w.iter().enumerate() {
+                for c in 0..3 {
+                    out[y * half + x][c] += wi * vertical[y * size + start + i][c];
+                }
+            }
+            out[y * half + x]
+                .iter_mut()
+                .for_each(|v| *v = v.clamp(0.0, 1.0));
+        }
+    }
+    out
+}
+
+/// Every sRGB level must be the correctly rounded value of the same chain done in f64 without rounding in between,
+/// up to float noise at rounding boundaries. Chaining the single-level calls rounds to 8 bits at every level and
+/// misses it on a large share of texels.
+#[test]
+fn srgb_mips_match_an_unrounded_chain() {
+    let size = 256;
+    let rgba: Vec<u8> = noise(size * size * 4, 3)
+        .chunks_exact(4)
+        .flat_map(|p| [p[0], p[1] / 2 + 64, p[2] / 4 + 16, 255])
+        .collect();
+    let (levels, total) = mip_layout(size as u32, size as u32, 4);
+    let mut output = vec![0u8; total];
+    write_level(&mut output, &levels[0], 4, &rgba);
+    let options = MipOptions::default();
+    generate_mips(&mut output, &levels, AlbedoFormat::Srgba8, &options);
+    let chained = reference_chain(&rgba, &levels, AlbedoFormat::Srgba8, &options);
+
+    let mut exact: Vec<[f64; 3]> = rgba
+        .chunks_exact(4)
+        .map(|p| [0, 1, 2].map(|c| srgb_to_linear(p[c])))
+        .collect();
+    for (k, level) in levels.iter().enumerate().skip(1).take(4) {
+        exact = float_step(&exact, level.width as usize * 2);
+        let rounded: Vec<u8> = exact
+            .iter()
+            .flat_map(|p| p.map(|l| linear_to_srgb(l).round() as u8))
+            .collect();
+        let off = |rgba: &[u8]| {
+            rgba.chunks_exact(4)
+                .zip(rounded.chunks_exact(3))
+                .filter(|(a, b)| a[..3] != **b)
+                .count() as f64
+                / rounded.len() as f64
+                * 3.0
+        };
+        let mips = off(&read_level(&output, level, 4));
+        let chained = off(&chained[k]);
+        assert!(
+            mips < 0.02,
+            "mip {k}: {:.1}% of texels are not the rounded exact value",
+            mips * 100.0
+        );
+        if k > 1 {
+            assert!(
+                mips * 5.0 < chained,
+                "mip {k}: generate_mips {mips}, chained calls {chained}"
+            );
+        }
+    }
+}
+
+#[test]
+fn flat_srgb_mips_stay_flat() {
+    let (levels, size) = mip_layout(64, 64, 4);
+    for value in 0..=255u8 {
+        let mut output = vec![0u8; size];
+        write_level(
+            &mut output,
+            &levels[0],
+            4,
+            &[value, value, value, 255].repeat(64 * 64),
+        );
+        generate_mips(
+            &mut output,
+            &levels,
+            AlbedoFormat::Srgba8,
+            &MipOptions::default(),
+        );
+        for level in &levels {
+            assert!(
+                read_level(&output, level, 4)
+                    .chunks_exact(4)
+                    .all(|p| p == [value, value, value, 255]),
+                "{value} changed at {}x{}",
+                level.width,
+                level.height
+            );
+        }
+    }
 }

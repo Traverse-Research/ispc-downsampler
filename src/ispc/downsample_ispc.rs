@@ -276,6 +276,8 @@ fn bindgen_test_layout_SampleWeights() {
 pub struct DownsamplingContext {
     pub weights: SampleWeights,
     pub srgb_encode: *const u8,
+    pub linear: *mut u16,
+    pub linear_row_pitch: u32,
 }
 #[test]
 fn bindgen_test_layout_DownsamplingContext() {
@@ -283,7 +285,7 @@ fn bindgen_test_layout_DownsamplingContext() {
     let ptr = UNINIT.as_ptr();
     assert_eq!(
         ::std::mem::size_of::<DownsamplingContext>(),
-        24usize,
+        40usize,
         concat!("Size of: ", stringify!(DownsamplingContext))
     );
     assert_eq!(
@@ -376,6 +378,14 @@ extern "C" {
         dst: *mut DownsampledImage,
         pixel_format: PixelFormat,
         ctx: *mut DownsamplingContext,
+    );
+}
+extern "C" {
+    pub fn resample_linear16(
+        src: *const SourceImage,
+        dst: *mut DownsampledImage,
+        ctx: *mut DownsamplingContext,
+        alpha_weighted: bool,
     );
 }
 extern "C" {

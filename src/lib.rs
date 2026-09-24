@@ -349,6 +349,7 @@ fn resample(
         &mut output,
         stride,
         target_width as usize * stride,
+        None,
     );
     output
 }
@@ -365,6 +366,7 @@ fn resample_into(
     output: &mut [u8],
     output_stride: usize,
     output_row_pitch: usize,
+    linear: Option<&mut [u16]>,
 ) {
     assert!(src.format.pixel_size_in_bytes() <= src.pixel_stride_in_bytes, "The stride between the pixels cannot be lower than the minimum size of the pixel according to the pixel format.");
 
@@ -440,7 +442,61 @@ fn resample_into(
                 } else {
                     std::ptr::null()
                 },
+                linear: linear.map_or(std::ptr::null_mut(), |l| l.as_mut_ptr()),
+                linear_row_pitch: target_width * 8,
             },
+        );
+    }
+}
+
+/// [resample_into] for the next level of an sRGB mip chain: the source is the linear 16-bit RGBA of the previous
+/// level (tightly packed), which keeps the precision the 8-bit sRGB output rounds away.
+#[allow(clippy::too_many_arguments)]
+fn resample_linear16_into(
+    src: &[u16],
+    src_width: u32,
+    src_height: u32,
+    target: &MipLevel,
+    filter_scale: f32,
+    alpha_weighted: bool,
+    output: &mut [u8],
+    linear: Option<&mut [u16]>,
+) {
+    assert!(src.len() >= (src_width * src_height) as usize * 4);
+    assert!(output.len() >= mip_level_size(target, 4));
+    assert!(linear
+        .as_ref()
+        .is_none_or(|l| l.len() >= (target.width * target.height) as usize * 4));
+    let sample_weights = precompute_lanczos_weights(
+        src_width,
+        src_height,
+        target.width,
+        target.height,
+        filter_scale,
+    );
+    unsafe {
+        ispc::downsample_ispc::resample_linear16(
+            &ispc::SourceImage {
+                width: src_width,
+                height: src_height,
+                data: src.as_ptr() as *const u8,
+                pixel_stride: 8,
+                row_pitch: src_width * 8,
+            },
+            &mut ispc::DownsampledImage {
+                width: target.width,
+                height: target.height,
+                data: output.as_mut_ptr(),
+                pixel_stride: 4,
+                row_pitch: target.row_pitch as u32,
+            },
+            &mut ispc::DownsamplingContext {
+                weights: *sample_weights.ispc_representation(),
+                srgb_encode: srgb_encode_table().as_ptr(),
+                linear: linear.map_or(std::ptr::null_mut(), |l| l.as_mut_ptr()),
+                linear_row_pitch: target.width * 8,
+            },
+            alpha_weighted,
         );
     }
 }
@@ -616,6 +672,8 @@ fn normal_map_into(
                     |weights| *weights.ispc_representation(),
                 ),
                 srgb_encode: std::ptr::null(),
+                linear: std::ptr::null_mut(),
+                linear_row_pitch: 0,
             },
         );
     }
@@ -701,7 +759,7 @@ fn check_mip_levels(buffer: &[u8], levels: &[MipLevel], texel: usize) {
             "Mip levels must be in order and not overlap"
         );
         assert!(level.row_pitch >= level.width as usize * texel);
-        end = level.offset + level_size(level, texel);
+        end = level.offset + mip_level_size(level, texel);
     }
     assert!(
         buffer.len() >= end,
@@ -710,7 +768,7 @@ fn check_mip_levels(buffer: &[u8], levels: &[MipLevel], texel: usize) {
 }
 
 /// Bytes from the start of `level` to the end of its last texel.
-fn level_size(level: &MipLevel, texel: usize) -> usize {
+fn mip_level_size(level: &MipLevel, texel: usize) -> usize {
     level.row_pitch * (level.height as usize - 1) + level.width as usize * texel
 }
 
@@ -745,7 +803,7 @@ pub fn generate_mips(
     // Coverage of the source, which every level keeps.
     let target_coverage = (options.alpha_coverage != AlphaCoverage::Unchanged).then(|| {
         let first = &levels[0];
-        let source = &buffer[first.offset..][..level_size(first, 4)];
+        let source = &buffer[first.offset..][..mip_level_size(first, 4)];
         unsafe {
             ispc::downsample_ispc::alpha_coverage(
                 first.width,
@@ -757,23 +815,56 @@ pub fn generate_mips(
         }
     });
 
-    for pair in levels.windows(2) {
+    // sRGB keeps every level's linear value at 16 bits for the next level (two buffers, levels alternate): filtering
+    // the rounded 8-bit sRGB instead brightens every level a little, up to ~0.75 of a step by mip 8.
+    let srgb = format == AlbedoFormat::Srgba8;
+    let linear_size = |i: usize| {
+        levels
+            .get(i)
+            .map_or(0, |l: &MipLevel| (l.width * l.height) as usize * 4)
+    };
+    // ponytail: allocated per call, and the page faults on first touch cost ~2.4 ms of a 2048 chain; take a reusable
+    // scratch buffer if that matters.
+    let mut linear = if srgb {
+        [vec![0u16; linear_size(1)], vec![0u16; linear_size(2)]]
+    } else {
+        [Vec::new(), Vec::new()]
+    };
+
+    for (i, pair) in levels.windows(2).enumerate() {
         let (previous, level) = (&pair[0], &pair[1]);
         let (head, tail) = buffer.split_at_mut(level.offset);
-        let previous_pixels = &head[previous.offset..][..level_size(previous, 4)];
-        let output = &mut tail[..level_size(level, 4)];
-        let image = Image::new(previous_pixels, previous.width, previous.height, format)
-            .with_row_pitch(previous.row_pitch);
-        resample_into(
-            &image,
-            level.width,
-            level.height,
-            options.filter_scale,
-            options.alpha_weighting,
-            output,
-            4,
-            level.row_pitch,
-        );
+        let output = &mut tail[..mip_level_size(level, 4)];
+        let [odd, even] = &mut linear;
+        let (read, write) = if i % 2 == 0 { (even, odd) } else { (odd, even) };
+        let write = srgb.then(|| &mut write[..(level.width * level.height) as usize * 4]);
+        if srgb && i > 0 {
+            resample_linear16_into(
+                read,
+                previous.width,
+                previous.height,
+                level,
+                options.filter_scale,
+                options.alpha_weighting,
+                output,
+                write,
+            );
+        } else {
+            let previous_pixels = &head[previous.offset..][..mip_level_size(previous, 4)];
+            let image = Image::new(previous_pixels, previous.width, previous.height, format)
+                .with_row_pitch(previous.row_pitch);
+            resample_into(
+                &image,
+                level.width,
+                level.height,
+                options.filter_scale,
+                options.alpha_weighting,
+                output,
+                4,
+                level.row_pitch,
+                write,
+            );
+        }
         if let Some(target) = target_coverage {
             unsafe {
                 ispc::downsample_ispc::scale_to_target_alpha_coverage(
@@ -784,6 +875,22 @@ pub fn generate_mips(
                     cutoff,
                     target,
                 );
+            }
+            if srgb {
+                // The next level reads alpha from the linear copy: give it the rescaled alpha.
+                let write = if i % 2 == 0 {
+                    &mut linear[0]
+                } else {
+                    &mut linear[1]
+                };
+                for y in 0..level.height as usize {
+                    let row = &output[y * level.row_pitch..][..level.width as usize * 4];
+                    let linear_row =
+                        &mut write[y * level.width as usize * 4..][..level.width as usize * 4];
+                    for (texel, alpha) in linear_row.chunks_exact_mut(4).zip(row.chunks_exact(4)) {
+                        texel[3] = alpha[3] as u16 * 257;
+                    }
+                }
             }
         }
     }
@@ -802,7 +909,7 @@ pub fn generate_normal_mips(buffer: &mut [u8], levels: &[MipLevel], format: Norm
     for pair in levels.windows(2) {
         let (previous, level) = (&pair[0], &pair[1]);
         let (head, tail) = buffer.split_at_mut(level.offset);
-        let previous_pixels = &head[previous.offset..][..level_size(previous, texel)];
+        let previous_pixels = &head[previous.offset..][..mip_level_size(previous, texel)];
         let image = Image::new_with_pixel_stride(
             previous_pixels,
             previous.width,
@@ -815,7 +922,7 @@ pub fn generate_normal_mips(buffer: &mut [u8], levels: &[MipLevel], format: Norm
             &image,
             level.width,
             level.height,
-            &mut tail[..level_size(level, texel)],
+            &mut tail[..mip_level_size(level, texel)],
             level.row_pitch,
         );
     }
