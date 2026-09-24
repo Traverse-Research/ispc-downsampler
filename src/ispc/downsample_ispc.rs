@@ -74,12 +74,19 @@ extern "C" {
     );
 }
 extern "C" {
-    pub fn alpha_coverage(width: u32, height: u32, data: *const u8, alpha_cutoff: *const f32) -> f64;
+    pub fn alpha_coverage(
+        width: u32,
+        height: u32,
+        row_pitch: u32,
+        data: *const u8,
+        alpha_cutoff: *const f32,
+    ) -> f64;
 }
 extern "C" {
     pub fn scale_to_target_alpha_coverage(
         width: u32,
         height: u32,
+        row_pitch: u32,
         data: *mut u8,
         alpha_cutoff: *const f32,
         target: f64,
@@ -102,6 +109,7 @@ pub struct SourceImage {
     pub height: u32,
     pub data: *const u8,
     pub pixel_stride: u32,
+    pub row_pitch: u32,
 }
 #[test]
 fn bindgen_test_layout_SourceImage() {
@@ -165,6 +173,7 @@ pub struct DownsampledImage {
     pub height: u32,
     pub data: *mut u8,
     pub pixel_stride: u32,
+    pub row_pitch: u32,
 }
 #[test]
 fn bindgen_test_layout_DownsampledImage() {

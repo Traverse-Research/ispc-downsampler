@@ -23,6 +23,8 @@ struct SourceImage {
     uniform uint32 height;
     uniform const uint8* data;
     uniform uint pixel_stride;
+    // Bytes from one row to the next.
+    uniform uint row_pitch;
 };
 
 struct DownsampledImage {
@@ -30,6 +32,8 @@ struct DownsampledImage {
     uniform uint32 height;
     uniform uint8* data;
     uniform uint pixel_stride;
+    // Bytes from one row to the next.
+    uniform uint row_pitch;
 };
 
 struct DownsamplingContext {
@@ -138,7 +142,7 @@ inline int advance_channel(int channel, uniform int step, uniform int channels) 
 // Loads element j of a source row. sRGB rgb is decoded to linear once per load, which is cheaper than a table.
 inline float load_flat(uniform SourceKind kind, const uniform SourceImage* uniform src, uniform uint32 row, uniform uint32 elements,
     int j, bool is_alpha) {
-    float value = (float)(src->data + (uint64)row * elements)[j];
+    float value = (float)(src->data + (uint64)row * src->row_pitch)[j];
     if (kind == SOURCE_FLAT_U8 || kind == SOURCE_ALPHA_WEIGHTED_U8)
         return value;
     value *= 1.0f / 255.0f;
@@ -164,7 +168,7 @@ struct RowCache {
 // Decodes source row `y` into `out`, `planes` floats per pixel.
 inline void decode_row(uniform SourceKind kind, const uniform SourceImage* uniform src, uniform uint32 y, uniform int channels,
     uniform float* uniform out) {
-    const uniform uint8* uniform row = src->data + (uint64)y * src->width * channels;
+    const uniform uint8* uniform row = src->data + (uint64)y * src->row_pitch;
     if (kind == SOURCE_FLAT_SRGB8 || kind == SOURCE_ALPHA_WEIGHTED_SRGB8) {
         // Linear rgba; alpha weighting premultiplies when summing, which is cheap compared to decoding.
         uniform uint32 elements = src->width * channels;
@@ -372,7 +376,8 @@ inline void vertical_pass(uniform const SourceImage* uniform src, uniform const 
                 float y0_ = 0.0f, y1 = 0.0f, y2 = 0.0f, y3 = 0.0f;
                 float z0 = 0.0f, z1 = 0.0f, z2 = 0.0f, z3 = 0.0f;
                 for (uniform uint32 r = 0; r < union_rows; r++) {
-                    uint16 p = ((const uniform uint16*)src->data + (uint64)(first + r) * src->width)[x];
+                    const uniform uint16* uniform row16 = (const uniform uint16*)(src->data + (uint64)(first + r) * src->row_pitch);
+                    uint16 p = row16[x];
                     float nx = decode_snorm8((float)(p & 0xFF));
                     float ny = decode_snorm8((float)(p >> 8));
                     float nz = reconstruct_z(nx, ny);
@@ -475,7 +480,7 @@ inline void horizontal_pass(uniform DownsampledImage* uniform dst, uniform const
     uniform int y0, uniform int rows, uniform const float* uniform block, uniform int planes, uniform int output_channels,
     uniform OutputKind output, const uniform uint8* uniform srgb_encode, uniform float scale) {
     uniform const int B = block_rows();
-    uniform const uint64 row_pitch = (uint64)dst->width * dst->pixel_stride;
+    uniform const uint64 row_pitch = dst->row_pitch;
     for (uniform uint32 xo = 0; xo < dst->width; xo++) {
         uniform uint32 start = weights->starts[xo];
         uniform uint32 count = weights->weight_counts[xo];
@@ -753,9 +758,9 @@ inline void normal_map_2x2(const uniform SourceImage* uniform src, uniform Downs
     uniform uint32 whole = width / programCount * programCount;
 
     for (uniform uint32 yo = 0; yo < dst->height; yo++) {
-        const uniform uint8* uniform top = src->data + (uint64)(2 * yo) * src->width * stride;
-        const uniform uint8* uniform bottom = top + src->width * stride;
-        uniform uint8* uniform out = dst->data + (uint64)yo * width * pixel_size;
+        const uniform uint8* uniform top = src->data + (uint64)(2 * yo) * src->row_pitch;
+        const uniform uint8* uniform bottom = top + src->row_pitch;
+        uniform uint8* uniform out = dst->data + (uint64)yo * dst->row_pitch;
 
         if (normal_map_format == R8g8b8 && stride == 3) {
             // Whole groups of 2 * programCount output texels, in three short loops over the row rather than one

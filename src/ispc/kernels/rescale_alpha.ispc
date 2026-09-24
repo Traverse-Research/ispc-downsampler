@@ -18,7 +18,7 @@ inline uniform bool is_1d(uniform Image image) {
 }
 
 inline const uniform uint32* uniform pixel_row(uniform Image image, uniform int y) {
-    return (const uniform uint32*)image.data + (uint64)y * image.size.x;
+    return (const uniform uint32*)(image.data + (uint64)y * image.row_pitch);
 }
 
 // Scaled and clamped alpha of a packed rgba pixel.
@@ -50,10 +50,12 @@ inline uint32 visible_in_row(float a00, float a10, float a01, float a11, uniform
 uniform uint64 count_visible(uniform Image image, uniform float scale, uniform float cutoff) {
     uniform uint64 visible = 0;
     if (is_1d(image)) {
-        const uniform uint32* uniform pixels = (const uniform uint32*)image.data;
+        // A row or a column: texels are `step` bytes apart.
+        uniform uint32 step = image.size.y == 1 ? 4 : image.row_pitch;
         uint32 lane_visible = 0;
         foreach (i = 0 ... image.size.x * image.size.y) {
-            lane_visible += scaled_alpha(pixels[i], scale) > cutoff ? 1 : 0;
+            uint32 pixel = *((const uniform uint32* varying)(image.data + (uint64)i * step));
+            lane_visible += scaled_alpha(pixel, scale) > cutoff ? 1 : 0;
         }
         return reduce_add(lane_visible);
     }
@@ -213,11 +215,13 @@ uniform float solve_scale_linear(uniform Image image, uniform double target) {
 // ---------------------------------------------------------------------------------------------------------------
 
 void apply_alpha_scale(uniform Image image, uniform float scale) {
-    uniform uint32* uniform pixels = (uniform uint32*)image.data;
-    foreach (i = 0 ... image.size.x * image.size.y) {
-        uint32 pixel = pixels[i];
-        uint32 alpha = (int32)min(255.0f, (float)(int32)(pixel >> 24) * scale + 0.5f);
-        pixels[i] = (pixel & 0x00FFFFFF) | (alpha << 24);
+    for (uniform int y = 0; y < image.size.y; y++) {
+        uniform uint32* uniform pixels = (uniform uint32*)pixel_row(image, y);
+        foreach (i = 0 ... image.size.x) {
+            uint32 pixel = pixels[i];
+            uint32 alpha = (int32)min(255.0f, (float)(int32)(pixel >> 24) * scale + 0.5f);
+            pixels[i] = (pixel & 0x00FFFFFF) | (alpha << 24);
+        }
     }
 }
 
@@ -247,23 +251,23 @@ void scale_to_coverage(uniform Image image, const uniform float* uniform alpha_c
         apply_alpha_scale(image, scale);
 }
 
-export uniform double alpha_coverage(uniform uint32 width, uniform uint32 height, uniform const uint8 data[],
-    const uniform float* uniform alpha_cutoff) {
-    uniform Image image = { (uniform uint8*)data, {width, height} };
+export uniform double alpha_coverage(uniform uint32 width, uniform uint32 height, uniform uint32 row_pitch,
+    uniform const uint8 data[], const uniform float* uniform alpha_cutoff) {
+    uniform Image image = { (uniform uint8*)data, {width, height}, row_pitch };
     return coverage(image, alpha_cutoff);
 }
 
-export void scale_to_target_alpha_coverage(uniform uint32 width, uniform uint32 height, uniform uint8 data[],
-    const uniform float* uniform alpha_cutoff, uniform double target) {
-    uniform Image image = { data, {width, height} };
+export void scale_to_target_alpha_coverage(uniform uint32 width, uniform uint32 height, uniform uint32 row_pitch,
+    uniform uint8 data[], const uniform float* uniform alpha_cutoff, uniform double target) {
+    uniform Image image = { data, {width, height}, row_pitch };
     scale_to_coverage(image, alpha_cutoff, target);
 }
 
 export void scale_to_alpha_coverage(uniform uint32 source_width, uniform uint32 source_height, uniform const uint8 source_data[],
     uniform uint32 downsampled_width, uniform uint32 downsampled_height, uniform uint8 downsampled_image_data[],
     const uniform float* uniform alpha_cutoff) {
-    uniform Image source = { (uniform uint8*)source_data, {source_width, source_height} };
-    uniform Image downsampled = { downsampled_image_data, {downsampled_width, downsampled_height} };
+    uniform Image source = { (uniform uint8*)source_data, {source_width, source_height}, source_width * 4 };
+    uniform Image downsampled = { downsampled_image_data, {downsampled_width, downsampled_height}, downsampled_width * 4 };
     // Cutoffs outside 0..1 are no-ops, and would count nothing.
     if (alpha_cutoff != NULL && (*alpha_cutoff >= 1.0f || *alpha_cutoff < 0.0f))
         return;

@@ -1,5 +1,5 @@
-//! `generate_mips_into()` and `generate_normal_mips_into()` must produce exactly what chaining the single-level
-//! functions does, in the D3D12 upload layout of `mip_layout()`.
+//! `generate_mips()` and `generate_normal_mips()` must produce exactly what chaining the single-level functions
+//! does, in place in the D3D12 upload layout of `mip_layout()`.
 
 use ispc_downsampler::*;
 
@@ -21,6 +21,14 @@ fn read_level(output: &[u8], level: &MipLevel, texel: usize) -> Vec<u8> {
     (0..level.height as usize)
         .flat_map(|y| output[level.offset + y * level.row_pitch..][..row].to_vec())
         .collect()
+}
+
+/// Copies tightly packed rows into `level`.
+fn write_level(output: &mut [u8], level: &MipLevel, texel: usize, data: &[u8]) {
+    let row = level.width as usize * texel;
+    for (y, src) in data.chunks_exact(row).enumerate() {
+        output[level.offset + y * level.row_pitch..][..row].copy_from_slice(src);
+    }
 }
 
 #[test]
@@ -146,24 +154,16 @@ fn mips_match_chained_downsampling() {
                 .collect();
             let (levels, size) = mip_layout(width, height, 4);
             for options in &alpha_options[..if channels == 4 { 5 } else { 2 }] {
-                // Also from a source with a pixel stride.
-                let padded: Vec<u8> = pixels
-                    .chunks_exact(channels)
-                    .flat_map(|p| [p, &[7u8; 2][..]].concat())
-                    .collect();
-                for src in [
-                    Image::new(&pixels, width, height, format),
-                    Image::new_with_pixel_stride(&padded, width, height, format, channels + 2),
-                ] {
-                    let mut output = noise(size, 99);
-                    generate_mips_into(&src, &levels, &mut output, options);
-                    let reference = reference_chain(&rgba, &levels, format, options);
-                    for (i, (level, expected)) in levels.iter().zip(&reference).enumerate() {
-                        assert!(
-                            read_level(&output, level, 4) == *expected,
-                            "{format:?} {width}x{height} {options:?}: level {i} differs"
-                        );
-                    }
+                // Garbage everywhere but level 0, to catch anything that is read before it is written.
+                let mut output = noise(size, 99);
+                write_level(&mut output, &levels[0], 4, &rgba);
+                generate_mips(&mut output, &levels, format, options);
+                let reference = reference_chain(&rgba, &levels, format, options);
+                for (i, (level, expected)) in levels.iter().zip(&reference).enumerate() {
+                    assert!(
+                        read_level(&output, level, 4) == *expected,
+                        "{format:?} {width}x{height} {options:?}: level {i} differs"
+                    );
                 }
             }
         }
@@ -181,13 +181,6 @@ fn normal_mips_match_chained_downsampling() {
         for (width, height) in [(256, 128), (100, 60), (1, 9)] {
             let pixels = noise((width * height) as usize * channels, width);
             let (levels, size) = mip_layout(width, height, texel);
-            let mut output = noise(size, 5);
-            generate_normal_mips_into(
-                &Image::new(&pixels, width, height, format),
-                &levels,
-                &mut output,
-            );
-
             let mut previous: Vec<u8> = pixels
                 .chunks_exact(channels)
                 .flat_map(|p| {
@@ -198,6 +191,9 @@ fn normal_mips_match_chained_downsampling() {
                     }
                 })
                 .collect();
+            let mut output = noise(size, 5);
+            write_level(&mut output, &levels[0], texel, &previous);
+            generate_normal_mips(&mut output, &levels, format);
             assert!(read_level(&output, &levels[0], texel) == previous);
             for pair in levels.windows(2) {
                 let (p, level) = (&pair[0], &pair[1]);
@@ -214,15 +210,14 @@ fn normal_mips_match_chained_downsampling() {
 }
 
 #[test]
-#[should_panic(expected = "The output needs")]
-fn mips_into_too_small_panics() {
-    let pixels = vec![0u8; 16 * 16 * 4];
+#[should_panic(expected = "The buffer needs")]
+fn mips_too_small_panics() {
     let (levels, size) = mip_layout(16, 16, 4);
     let mut output = vec![0u8; size - 1];
-    generate_mips_into(
-        &Image::new(&pixels, 16, 16, AlbedoFormat::Rgba8Unorm),
-        &levels,
+    generate_mips(
         &mut output,
+        &levels,
+        AlbedoFormat::Rgba8Unorm,
         &MipOptions::default(),
     );
 }
