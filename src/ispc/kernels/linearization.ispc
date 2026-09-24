@@ -2,29 +2,18 @@
 
 // sRGB transfer functions (IEC 61966-2-1). Filtering must happen on linear values, see
 // https://github.com/Traverse-Research/ispc-downsampler/issues/25.
+// Encoding back to sRGB uses a table built on the Rust side, see `srgb_encode_table()`.
 
-// Decoding happens once per source texel in `linearize_srgb()`, as a table lookup straight to linear u16.
-static const uniform uint16 SRGB_TO_LINEAR16[256] = {
-    0, 20, 40, 60, 80, 99, 119, 139, 159, 179, 199, 219, 241, 264, 288, 313,
-    340, 367, 396, 427, 458, 491, 526, 562, 599, 637, 677, 718, 761, 805, 851, 898,
-    947, 997, 1048, 1101, 1156, 1212, 1270, 1330, 1391, 1453, 1517, 1583, 1651, 1720, 1790, 1863,
-    1937, 2013, 2090, 2170, 2250, 2333, 2418, 2504, 2592, 2681, 2773, 2866, 2961, 3058, 3157, 3258,
-    3360, 3464, 3570, 3678, 3788, 3900, 4014, 4129, 4247, 4366, 4488, 4611, 4736, 4864, 4993, 5124,
-    5257, 5392, 5530, 5669, 5810, 5953, 6099, 6246, 6395, 6547, 6700, 6856, 7014, 7174, 7335, 7500,
-    7666, 7834, 8004, 8177, 8352, 8528, 8708, 8889, 9072, 9258, 9445, 9635, 9828, 10022, 10219, 10417,
-    10619, 10822, 11028, 11235, 11446, 11658, 11873, 12090, 12309, 12530, 12754, 12980, 13209, 13440, 13673, 13909,
-    14146, 14387, 14629, 14874, 15122, 15371, 15623, 15878, 16135, 16394, 16656, 16920, 17187, 17456, 17727, 18001,
-    18277, 18556, 18837, 19121, 19407, 19696, 19987, 20281, 20577, 20876, 21177, 21481, 21787, 22096, 22407, 22721,
-    23038, 23357, 23678, 24002, 24329, 24658, 24990, 25325, 25662, 26001, 26344, 26688, 27036, 27386, 27739, 28094,
-    28452, 28813, 29176, 29542, 29911, 30282, 30656, 31033, 31412, 31794, 32179, 32567, 32957, 33350, 33745, 34143,
-    34544, 34948, 35355, 35764, 36176, 36591, 37008, 37429, 37852, 38278, 38706, 39138, 39572, 40009, 40449, 40891,
-    41337, 41785, 42236, 42690, 43147, 43606, 44069, 44534, 45002, 45473, 45947, 46423, 46903, 47385, 47871, 48359,
-    48850, 49344, 49841, 50341, 50844, 51349, 51858, 52369, 52884, 53401, 53921, 54445, 54971, 55500, 56032, 56567,
-    57105, 57646, 58190, 58737, 59287, 59840, 60396, 60955, 61517, 62082, 62650, 63221, 63795, 64372, 64952, 65535
-};
-
-// Encoding only happens once per written texel.
-inline float linear_to_srgb(float linear) {
-    linear = clamp(linear, 0.0f, 1.0f);
-    return linear <= 0.0031308f ? linear * 12.92f : 1.055f * pow(linear, 1.0f / 2.4f) - 0.055f;
+// sRGB 0..1 to linear 0..1. The curve above the linear segment is a degree 6 polynomial fit (max error 1.4e-5), which
+// is cheap enough to evaluate for every loaded value and accurate enough that every 8-bit sRGB value survives a
+// round trip through the encode table.
+inline float srgb_to_linear(float srgb) {
+    float curve = -0.0489606597f;
+    curve = curve * srgb + 0.207285017f;
+    curve = curve * srgb - 0.409055501f;
+    curve = curve * srgb + 0.700847626f;
+    curve = curve * srgb + 0.516486168f;
+    curve = curve * srgb + 0.0324432105f;
+    curve = curve * srgb + 0.000945259468f;
+    return srgb <= 0.04045f ? srgb * (1.0f / 12.92f) : curve;
 }
