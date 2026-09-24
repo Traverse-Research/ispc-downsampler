@@ -337,19 +337,38 @@ fn resample(
         filter_scale,
     );
 
-    // The new implementation needs a src_height * target_width intermediate buffer.
-    // When alpha weighting, the kernel keeps 7 floats per texel: the alpha weighted rgb sum, the alpha sum and the
-    // unweighted rgb sum.
-    let scratch_channels = if alpha_weighted {
-        7
-    } else {
-        src.format.num_channel_in_memory()
+    let channels = src.format.num_channel_in_memory();
+    let mut src_image = ispc::SourceImage {
+        width: src.width,
+        height: src.height,
+        data: src.pixels.as_ptr(),
+        pixel_stride: src.pixel_stride_in_bytes as u32,
     };
-    let mut scratch_space = vec![0f32; (src.height * target_width) as usize * scratch_channels];
 
-    // Only used for sRGB formats, which are linearized one row at a time
-    let mut linear_row =
-        vec![0f32; (src.width * src.format.num_channel_in_memory() as u32) as usize];
+    // sRGB is filtered in linear space. Decode each texel once up front to linear u16, rather than once per
+    // filter tap, and let the kernel read that instead.
+    let srgb = matches!(src.format, AlbedoFormat::Srgb8 | AlbedoFormat::Srgba8);
+    // Declared out here so it outlives the kernel call below, which reads it through `src_image`.
+    let linear;
+    if srgb {
+        let mut decoded = vec![0u16; (src.width * src.height) as usize * channels];
+        unsafe {
+            ispc::downsample_ispc::linearize_srgb(
+                &src_image,
+                decoded.as_mut_ptr(),
+                channels as u32,
+            );
+        }
+        linear = decoded;
+        src_image.data = linear.as_ptr().cast();
+        src_image.pixel_stride = (channels * std::mem::size_of::<u16>()) as u32;
+    }
+
+    // The horizontal pass writes a src_height * target_width intermediate of unclamped floats: Lanczos has
+    // negative lobes, so clamping or quantizing between the two passes would distort edges. Alpha weighting
+    // keeps 7 sums per texel, see `scratch_floats()` in the kernel.
+    let scratch_floats = if alpha_weighted { 7 } else { channels };
+    let mut scratch_space = vec![0f32; (src.height * target_width) as usize * scratch_floats];
 
     // The kernel writes pixels `pixel_stride_in_bytes` apart, so the output must be sized by stride.
     let mut output = vec![0u8; (target_width * target_height) as usize * src.pixel_stride_in_bytes];
@@ -364,12 +383,7 @@ fn resample(
 
     unsafe {
         kernel(
-            &ispc::SourceImage {
-                width: src.width,
-                height: src.height,
-                data: src.pixels.as_ptr(),
-                pixel_stride: src.pixel_stride_in_bytes as u32,
-            },
+            &src_image,
             &mut ispc::DownsampledImage {
                 width: target_width,
                 height: target_height,
@@ -380,7 +394,6 @@ fn resample(
             &mut ispc::DownsamplingContext {
                 weights: *sample_weights.ispc_representation(),
                 scratch_space: scratch_space.as_mut_ptr(),
-                linear_row: linear_row.as_mut_ptr(),
             },
         );
     }

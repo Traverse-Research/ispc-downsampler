@@ -255,7 +255,6 @@ fn bindgen_test_layout_SampleWeights() {
 pub struct DownsamplingContext {
     pub weights: SampleWeights,
     pub scratch_space: *mut f32,
-    pub linear_row: *mut f32,
 }
 #[test]
 fn bindgen_test_layout_DownsamplingContext() {
@@ -263,7 +262,7 @@ fn bindgen_test_layout_DownsamplingContext() {
     let ptr = UNINIT.as_ptr();
     assert_eq!(
         ::std::mem::size_of::<DownsamplingContext>(),
-        32usize,
+        24usize,
         concat!("Size of: ", stringify!(DownsamplingContext))
     );
     assert_eq!(
@@ -289,16 +288,6 @@ fn bindgen_test_layout_DownsamplingContext() {
             stringify!(DownsamplingContext),
             "::",
             stringify!(scratch_space)
-        )
-    );
-    assert_eq!(
-        unsafe { ::std::ptr::addr_of!((*ptr).linear_row) as usize - ptr as usize },
-        24usize,
-        concat!(
-            "Offset of field: ",
-            stringify!(DownsamplingContext),
-            "::",
-            stringify!(linear_row)
         )
     );
 }
@@ -360,6 +349,9 @@ extern "C" {
         dst: *mut DownsampledImage,
         normal_map_format: NormalMapFormat,
     );
+}
+extern "C" {
+    pub fn linearize_srgb(src: *const SourceImage, out: *mut u16, num_channels: u32);
 }
 extern "C" {
     pub fn resample_with_cached_weights_3(

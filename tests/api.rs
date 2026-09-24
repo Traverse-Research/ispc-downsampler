@@ -202,7 +202,12 @@ fn mirrored_input_gives_mirrored_output() {
 
 #[test]
 fn pixel_stride_matches_tightly_packed() {
-    for (format, packed_channels) in [(AlbedoFormat::Rgb8Unorm, 3), (AlbedoFormat::Rgba8Unorm, 4)] {
+    for (format, packed_channels) in [
+        (AlbedoFormat::Rgb8Unorm, 3),
+        (AlbedoFormat::Rgba8Unorm, 4),
+        (AlbedoFormat::Srgb8, 3),
+        (AlbedoFormat::Srgba8, 4),
+    ] {
         for stride in [packed_channels + 1, 8] {
             let (w, h) = (24u32, 18u32);
             let padded = noise((w * h) as usize * stride, stride as u32);
@@ -704,6 +709,156 @@ fn normal_mip_chain_stays_unit_length() {
                     "{format:?} at {s}"
                 );
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// sRGB (https://github.com/Traverse-Research/ispc-downsampler/issues/25)
+
+fn linear_to_srgb(linear: f64) -> u8 {
+    let s = if linear <= 0.0031308 {
+        linear * 12.92
+    } else {
+        1.055 * linear.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round() as u8
+}
+
+#[test]
+fn srgb_filters_in_linear_space() {
+    // Alternating black and white rows: the correct average is 50% linear light, not 50% of the encoded value.
+    let (w, h) = (16u32, 32u32);
+    for (format, channels) in [(AlbedoFormat::Srgb8, 3), (AlbedoFormat::Srgba8, 4)] {
+        let data = (0..h)
+            .flat_map(|y| vec![if y % 2 == 0 { 0u8 } else { 255 }; (w as usize) * channels])
+            .collect::<Vec<_>>();
+        let out = downsample(&Image::new(&data, w, h, format), w, h / 2);
+        let expected = linear_to_srgb(0.5);
+        assert_eq!(expected, 188);
+        // Rows near the border see a truncated, renormalized filter, so only check the interior.
+        let row = (w as usize) * channels;
+        for p in out[row * 3..out.len() - row * 3].chunks(channels) {
+            assert_close(&p[..3], &[expected; 3], 1, &format!("{format:?}"));
+        }
+
+        let unorm = if channels == 3 {
+            AlbedoFormat::Rgb8Unorm
+        } else {
+            AlbedoFormat::Rgba8Unorm
+        };
+        let out = downsample(&Image::new(&data, w, h, unorm), w, h / 2);
+        assert_close(
+            &out[row * 3..row * 3 + 3],
+            &[128; 3],
+            1,
+            "unorm averages encoded values",
+        );
+    }
+}
+
+#[test]
+fn srgb_round_trips_every_value() {
+    for format in [AlbedoFormat::Srgb8, AlbedoFormat::Srgba8] {
+        let channels = format.num_channel_in_memory();
+        for value in 0..=255u8 {
+            let data = vec![value; 16 * 16 * channels];
+            let out = downsample(&Image::new(&data, 16, 16, format), 8, 8);
+            assert!(out.iter().all(|&v| v == value), "{format:?} {value}");
+        }
+    }
+}
+
+#[test]
+fn srgba_alpha_stays_linear() {
+    let data = noise(32 * 32 * 4, 47);
+    let srgb = downsample(&Image::new(&data, 32, 32, AlbedoFormat::Srgba8), 11, 11);
+    let unorm = downsample(&Image::new(&data, 32, 32, AlbedoFormat::Rgba8Unorm), 11, 11);
+    // sRGB reads alpha widened to u16 and unorm reads it as u8, so float rounding may differ by 1.
+    let alpha = |v: &[u8]| v.chunks(4).map(|p| p[3]).collect::<Vec<_>>();
+    assert_close(&alpha(&srgb), &alpha(&unorm), 1, "alpha");
+    assert_ne!(
+        srgb, unorm,
+        "rgb should differ once filtered in linear space"
+    );
+}
+
+#[test]
+fn srgb_alpha_weighting_filters_in_linear_space() {
+    // Alpha weighting and sRGB compose: opaque stripes of black and white, transparent garbage in between.
+    let (w, h) = (16u32, 48u32);
+    let data = (0..h)
+        .flat_map(|y| {
+            let p = match y % 3 {
+                0 => [0, 0, 0, 255],
+                1 => [255, 255, 255, 255],
+                _ => [255, 0, 0, 0],
+            };
+            p.repeat(w as usize)
+        })
+        .collect::<Vec<_>>();
+    let out = downsample_with_alpha_weighting(
+        &Image::new(&data, w, h, AlbedoFormat::Srgba8),
+        w,
+        h / 3,
+        1.0,
+    );
+    let row = w as usize * 4;
+    for p in out[row * 3..out.len() - row * 3].chunks(4) {
+        assert!(
+            p[1] == p[0] && p[2] == p[0],
+            "transparent red leaked: {p:?}"
+        );
+        assert!(p[0] > 150, "averaged in encoded space: {p:?}");
+    }
+}
+
+#[test]
+fn alpha_coverage_accepts_srgba() {
+    // Alpha is linear in sRGB formats too, so coverage must work and match the unorm result.
+    let data = cutout(64, 64);
+    let down = downsample(&Image::new(&data, 64, 64, AlbedoFormat::Rgba8Unorm), 32, 32);
+    let scale = |format| {
+        scale_alpha_to_original_coverage(
+            &Image::new(&data, 64, 64, format),
+            &Image::new(&down, 32, 32, format),
+            Some(0.5),
+        )
+    };
+    assert_eq!(scale(AlbedoFormat::Srgba8), scale(AlbedoFormat::Rgba8Unorm));
+}
+
+#[test]
+fn pass_order_does_not_matter() {
+    // The horizontal and vertical passes commute only if nothing is clamped or quantized in between. Lanczos
+    // has negative lobes, so high-contrast input overshoots after the first pass; clamping it there would make
+    // filtering the transposed image give a different result.
+    let size = 48usize;
+    let data = noise(size * size * 4, 53)
+        .into_iter()
+        .map(|v| if v > 127 { 255 } else { 0 })
+        .collect::<Vec<_>>();
+    let transpose = |d: &[u8], n: usize| {
+        let mut t = vec![0u8; d.len()];
+        for y in 0..n {
+            for x in 0..n {
+                t[(x * n + y) * 4..][..4].copy_from_slice(&d[(y * n + x) * 4..][..4]);
+            }
+        }
+        t
+    };
+    for format in [AlbedoFormat::Rgba8Unorm, AlbedoFormat::Srgba8] {
+        for target in [24u32, 17] {
+            let t = target as usize;
+            let out = downsample(&Image::new(&data, 48, 48, format), target, target);
+            let transposed = transpose(&data, size);
+            let out_t = downsample(&Image::new(&transposed, 48, 48, format), target, target);
+            assert_close(
+                &out,
+                &transpose(&out_t, t),
+                1,
+                &format!("{format:?} to {target}"),
+            );
         }
     }
 }

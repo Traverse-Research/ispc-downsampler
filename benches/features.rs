@@ -104,6 +104,34 @@ fn formats(c: &mut Criterion) {
     group.finish();
 }
 
+/// sRGB decodes on every filter tap and encodes on every write, so compare it against the same data as unorm.
+fn srgb(c: &mut Criterion) {
+    let (rgb, size) = load_rgb();
+    let rgba = to_cutout_rgba(&rgb);
+    let mut group = c.benchmark_group("srgb_vs_unorm_2048");
+    group.throughput(pixels(size, size));
+    for target in [1024, 256] {
+        for (name, data, format) in [
+            ("rgb8_unorm", &rgb, AlbedoFormat::Rgb8Unorm),
+            ("srgb8", &rgb, AlbedoFormat::Srgb8),
+            ("rgba8_unorm", &rgba, AlbedoFormat::Rgba8Unorm),
+            ("srgba8", &rgba, AlbedoFormat::Srgba8),
+        ] {
+            let src = Image::new(data, size, size, format);
+            group.bench_with_input(BenchmarkId::new(name, target), &target, |b, &t| {
+                b.iter(|| downsample(&src, t, t))
+            });
+        }
+        let src = Image::new(&rgba, size, size, AlbedoFormat::Srgba8);
+        group.bench_with_input(
+            BenchmarkId::new("srgba8_alpha_weighted", target),
+            &target,
+            |b, &t| b.iter(|| downsample_with_alpha_weighting(&src, t, t, 3.0)),
+        );
+    }
+    group.finish();
+}
+
 fn shapes(c: &mut Criterion) {
     let (rgb, size) = load_rgb();
     let mut group = c.benchmark_group("shape");
@@ -225,6 +253,9 @@ fn mip_chains(c: &mut Criterion) {
             })
         })
     });
+    group.bench_function("srgba8", |b| {
+        b.iter(|| chain(&rgba, AlbedoFormat::Srgba8, &|src, t| downsample(src, t, t)))
+    });
     group.bench_function("rgba8_alpha_weighted", |b| {
         b.iter(|| {
             chain(&rgba, AlbedoFormat::Rgba8Unorm, &|src, t| {
@@ -267,6 +298,7 @@ criterion_group!(
     ratios,
     filter_scales,
     formats,
+    srgb,
     shapes,
     small_images,
     normal_maps,
