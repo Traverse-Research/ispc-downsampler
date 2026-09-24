@@ -72,11 +72,9 @@ inline float rsqrt_precise(float v) {
     return r * (1.5f - 0.5f * v * r * r);
 }
 
-// z of a unit normal from x and y, at least 0.1. `t * rsqrt(t)` rather than `sqrt(t)`, which has a low throughput
-// on some CPUs (Zen 2).
+// z of a unit normal from x and y, at least 0.1. A plain `sqrt`: as exact, and faster here than `t * rsqrt_precise(t)`.
 inline float reconstruct_z(float x, float y) {
-    float t = max(0.01f, 1.0f - (x * x + y * y));
-    return t * rsqrt_precise(t);
+    return sqrt(max(0.01f, 1.0f - (x * x + y * y)));
 }
 
 inline float decode_snorm8(float value) {
