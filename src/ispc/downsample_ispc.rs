@@ -73,6 +73,25 @@ extern "C" {
         alpha_cutoff: *const f32,
     );
 }
+extern "C" {
+    pub fn alpha_coverage(
+        width: u32,
+        height: u32,
+        row_pitch: u32,
+        data: *const u8,
+        alpha_cutoff: *const f32,
+    ) -> f64;
+}
+extern "C" {
+    pub fn scale_to_target_alpha_coverage(
+        width: u32,
+        height: u32,
+        row_pitch: u32,
+        data: *mut u8,
+        alpha_cutoff: *const f32,
+        target: f64,
+    );
+}
 pub const NormalMapFormat_R8g8b8: NormalMapFormat = 0;
 pub const NormalMapFormat_R8g8TangentSpaceReconstructedZ: NormalMapFormat = 1;
 pub type NormalMapFormat = ::std::os::raw::c_uint;
@@ -90,6 +109,7 @@ pub struct SourceImage {
     pub height: u32,
     pub data: *const u8,
     pub pixel_stride: u32,
+    pub row_pitch: u32,
 }
 #[test]
 fn bindgen_test_layout_SourceImage() {
@@ -153,6 +173,7 @@ pub struct DownsampledImage {
     pub height: u32,
     pub data: *mut u8,
     pub pixel_stride: u32,
+    pub row_pitch: u32,
 }
 #[test]
 fn bindgen_test_layout_DownsampledImage() {
@@ -255,6 +276,8 @@ fn bindgen_test_layout_SampleWeights() {
 pub struct DownsamplingContext {
     pub weights: SampleWeights,
     pub srgb_encode: *const u8,
+    pub linear: *mut u16,
+    pub linear_row_pitch: u32,
 }
 #[test]
 fn bindgen_test_layout_DownsamplingContext() {
@@ -262,7 +285,7 @@ fn bindgen_test_layout_DownsamplingContext() {
     let ptr = UNINIT.as_ptr();
     assert_eq!(
         ::std::mem::size_of::<DownsamplingContext>(),
-        24usize,
+        40usize,
         concat!("Size of: ", stringify!(DownsamplingContext))
     );
     assert_eq!(
@@ -355,6 +378,14 @@ extern "C" {
         dst: *mut DownsampledImage,
         pixel_format: PixelFormat,
         ctx: *mut DownsamplingContext,
+    );
+}
+extern "C" {
+    pub fn resample_linear16(
+        src: *const SourceImage,
+        dst: *mut DownsampledImage,
+        ctx: *mut DownsamplingContext,
+        alpha_weighted: bool,
     );
 }
 extern "C" {

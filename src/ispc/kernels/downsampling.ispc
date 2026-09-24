@@ -23,6 +23,8 @@ struct SourceImage {
     uniform uint32 height;
     uniform const uint8* data;
     uniform uint pixel_stride;
+    // Bytes from one row to the next.
+    uniform uint row_pitch;
 };
 
 struct DownsampledImage {
@@ -30,12 +32,18 @@ struct DownsampledImage {
     uniform uint32 height;
     uniform uint8* data;
     uniform uint pixel_stride;
+    // Bytes from one row to the next.
+    uniform uint row_pitch;
 };
 
 struct DownsamplingContext {
     uniform const SampleWeights weights;
     // 65536 entries: linear value quantized to 16 bits to 8-bit sRGB. Only needed for sRGB formats.
     uniform const uint8* srgb_encode;
+    // Optional: sRGB outputs also store their linear value here, as 16-bit RGBA in rows `linear_row_pitch` bytes
+    // apart, for the next level of a mip chain to read instead of the rounded sRGB bytes.
+    uniform uint16* linear;
+    uniform uint32 linear_row_pitch;
 };
 
 // How the vertical pass reads source pixels into planes of the intermediate.
@@ -50,6 +58,9 @@ enum SourceKind {
     SOURCE_ALPHA_WEIGHTED_SRGB8,
     // Packed RG normals, decoded to xyz planes since reconstructing z is not linear.
     SOURCE_NORMAL_RG8,
+    // Linear RGBA as 16-bit unorm, the precision a mip chain keeps between sRGB levels; like the sRGB kinds otherwise.
+    SOURCE_FLAT_LINEAR16,
+    SOURCE_ALPHA_WEIGHTED_LINEAR16,
 };
 
 // How the horizontal pass turns planes into output pixels.
@@ -138,7 +149,11 @@ inline int advance_channel(int channel, uniform int step, uniform int channels) 
 // Loads element j of a source row. sRGB rgb is decoded to linear once per load, which is cheaper than a table.
 inline float load_flat(uniform SourceKind kind, const uniform SourceImage* uniform src, uniform uint32 row, uniform uint32 elements,
     int j, bool is_alpha) {
-    float value = (float)(src->data + (uint64)row * elements)[j];
+    if (kind == SOURCE_FLAT_LINEAR16 || kind == SOURCE_ALPHA_WEIGHTED_LINEAR16) {
+        const uniform uint16* uniform row16 = (const uniform uint16*)(src->data + (uint64)row * src->row_pitch);
+        return (float)(int32)row16[j] * (1.0f / 65535.0f);
+    }
+    float value = (float)(src->data + (uint64)row * src->row_pitch)[j];
     if (kind == SOURCE_FLAT_U8 || kind == SOURCE_ALPHA_WEIGHTED_U8)
         return value;
     value *= 1.0f / 255.0f;
@@ -164,8 +179,18 @@ struct RowCache {
 // Decodes source row `y` into `out`, `planes` floats per pixel.
 inline void decode_row(uniform SourceKind kind, const uniform SourceImage* uniform src, uniform uint32 y, uniform int channels,
     uniform float* uniform out) {
-    const uniform uint8* uniform row = src->data + (uint64)y * src->width * channels;
-    if (kind == SOURCE_FLAT_SRGB8 || kind == SOURCE_ALPHA_WEIGHTED_SRGB8) {
+    const uniform uint8* uniform row = src->data + (uint64)y * src->row_pitch;
+    if (kind == SOURCE_FLAT_LINEAR16 || kind == SOURCE_ALPHA_WEIGHTED_LINEAR16) {
+        const uniform uint16* uniform row16 = (const uniform uint16*)row;
+        uniform uint32 elements = src->width * channels;
+        uniform uint32 j0 = 0;
+        for (; j0 + programCount <= elements; j0 += programCount) {
+            out[j0 + programIndex] = (float)(int32)row16[j0 + programIndex] * (1.0f / 65535.0f);
+        }
+        if (j0 + programIndex < elements) {
+            out[j0 + programIndex] = (float)(int32)row16[j0 + programIndex] * (1.0f / 65535.0f);
+        }
+    } else if (kind == SOURCE_FLAT_SRGB8 || kind == SOURCE_ALPHA_WEIGHTED_SRGB8) {
         // Linear rgba; alpha weighting premultiplies when summing, which is cheap compared to decoding.
         uniform uint32 elements = src->width * channels;
         int channel = programIndex % channels;
@@ -254,7 +279,7 @@ inline void vertical_pass(uniform const SourceImage* uniform src, uniform const 
                 cache->union_slots[r] = slot;
             }
             uniform uint32 elements = cache->elements;
-            if (kind == SOURCE_ALPHA_WEIGHTED_SRGB8) {
+            if (kind == SOURCE_ALPHA_WEIGHTED_SRGB8 || kind == SOURCE_ALPHA_WEIGHTED_LINEAR16) {
                 // Cached rows hold linear rgba; element j = 4 * x + c goes to planes 8 * x + c (premultiplied)
                 // and 8 * x + 4 + c (unweighted).
                 int channel = programIndex & 3;
@@ -307,7 +332,7 @@ inline void vertical_pass(uniform const SourceImage* uniform src, uniform const 
             continue;
         }
 
-        if (kind == SOURCE_FLAT_U8 || kind == SOURCE_FLAT_SRGB8) {
+        if (kind == SOURCE_FLAT_U8 || kind == SOURCE_FLAT_SRGB8 || kind == SOURCE_FLAT_LINEAR16) {
             // Every element is its own plane. Two vectors per iteration for 8 independent sums.
             uniform uint32 elements = src->width * channels;
             uniform uint32 j0 = 0;
@@ -341,7 +366,8 @@ inline void vertical_pass(uniform const SourceImage* uniform src, uniform const 
                     store_4_rows(block, j, b, a0, a1, a2, a3);
                 }
             }
-        } else if (kind == SOURCE_ALPHA_WEIGHTED_U8 || kind == SOURCE_ALPHA_WEIGHTED_SRGB8) {
+        } else if (kind == SOURCE_ALPHA_WEIGHTED_U8 || kind == SOURCE_ALPHA_WEIGHTED_SRGB8
+            || kind == SOURCE_ALPHA_WEIGHTED_LINEAR16) {
             // Lanes over RGBA elements, 4 per pixel. Every pixel gets 8 planes: premultiplied rgb and alpha, then
             // the unweighted rgba (for when nothing under the filter is visible; its alpha plane is unused).
             // Element j = 4 * x + c goes to planes 8 * x + c and 8 * x + 4 + c.
@@ -372,7 +398,8 @@ inline void vertical_pass(uniform const SourceImage* uniform src, uniform const 
                 float y0_ = 0.0f, y1 = 0.0f, y2 = 0.0f, y3 = 0.0f;
                 float z0 = 0.0f, z1 = 0.0f, z2 = 0.0f, z3 = 0.0f;
                 for (uniform uint32 r = 0; r < union_rows; r++) {
-                    uint16 p = ((const uniform uint16*)src->data + (uint64)(first + r) * src->width)[x];
+                    const uniform uint16* uniform row16 = (const uniform uint16*)(src->data + (uint64)(first + r) * src->row_pitch);
+                    uint16 p = row16[x];
                     float nx = decode_snorm8((float)(p & 0xFF));
                     float ny = decode_snorm8((float)(p >> 8));
                     float nz = reconstruct_z(nx, ny);
@@ -434,30 +461,49 @@ inline void store_pixel(uniform uint8* varying pixel, uint32 packed, uniform int
     }
 }
 
-// Turns the filtered planes of one output pixel into its stored format.
+// Linear 0..1 quantized to 16 bits, the grid `to_srgb8()` encodes from.
+inline uint32 to_unorm16(float value) {
+    return (int32)(clamp(value, 0.0f, 1.0f) * 65535.0f + 0.5f);
+}
+
+// Stores linear rgb and the 8-bit alpha as 16-bit RGBA, for the next level of a mip chain.
+inline void store_linear(uniform uint16* varying linear, float r, float g, float b, uint32 alpha8) {
+    uint64 value = (uint64)to_unorm16(r) | ((uint64)to_unorm16(g) << 16) | ((uint64)to_unorm16(b) << 32)
+        | ((uint64)(alpha8 * 257) << 48);
+    *((uniform uint64* varying)linear) = value;
+}
+
+// Turns the filtered planes of one output pixel into its stored format. With `linear` set, albedo also keeps its
+// linear value there (16-bit RGBA, rows `linear_pitch` bytes apart).
 inline void write_output(uniform DownsampledImage* uniform dst, int b, uniform int y0, uniform uint32 xo, uniform uint64 row_pitch,
     float s0, float s1, float s2, float s3, float s4, float s5, float s6,
-    uniform int output_channels, uniform OutputKind output, const uniform uint8* uniform srgb_encode, uniform float scale) {
+    uniform int output_channels, uniform OutputKind output, const uniform uint8* uniform srgb_encode, uniform float scale,
+    uniform uint8* uniform linear, uniform uint64 linear_pitch) {
     uniform uint8* varying pixel = dst->data + (uint64)(y0 + b) * row_pitch + (uint64)xo * dst->pixel_stride;
+    uniform uint16* varying linear_pixel = (uniform uint16* varying)(linear + (uint64)(y0 + b) * linear_pitch + (uint64)xo * 8);
     uniform bool last_column = xo == dst->width - 1;
     if (output == OUTPUT_ALBEDO) {
-        uint32 packed = pack_rgb(s0 * scale, s1 * scale, s2 * scale, srgb_encode);
+        float r = s0 * scale, g = s1 * scale, bl = s2 * scale;
         // A 4th byte is either alpha or padding, which albedo leaves at 0.
-        if (output_channels == 4)
-            packed |= to_unorm8(s3 * scale) << 24;
-        store_pixel(pixel, packed, output_channels, dst->pixel_stride, last_column);
+        uint32 alpha8 = output_channels == 4 ? to_unorm8(s3 * scale) : 0;
+        store_pixel(pixel, pack_rgb(r, g, bl, srgb_encode) | (alpha8 << 24), output_channels, dst->pixel_stride, last_column);
+        if (linear != NULL)
+            store_linear(linear_pixel, r, g, bl, alpha8);
     } else if (output == OUTPUT_ALBEDO_ALPHA_WEIGHTED) {
         // s0..2 are alpha weighted sums in source units squared, s3 the alpha sum. If nothing under the
         // filter is visible there is nothing to weight by, so fall back to the unweighted sums.
         float alpha = s3 * scale;
-        uint32 packed;
+        float r, g, bl;
         if (alpha > 0.5f / 255.0f) {
             float to_colour = scale / s3;
-            packed = pack_rgb(s0 * to_colour, s1 * to_colour, s2 * to_colour, srgb_encode);
+            r = s0 * to_colour, g = s1 * to_colour, bl = s2 * to_colour;
         } else {
-            packed = pack_rgb(s4 * scale, s5 * scale, s6 * scale, srgb_encode);
+            r = s4 * scale, g = s5 * scale, bl = s6 * scale;
         }
-        store_pixel(pixel, packed | (to_unorm8(alpha) << 24), 4, dst->pixel_stride, last_column);
+        uint32 alpha8 = to_unorm8(alpha);
+        store_pixel(pixel, pack_rgb(r, g, bl, srgb_encode) | (alpha8 << 24), 4, dst->pixel_stride, last_column);
+        if (linear != NULL)
+            store_linear(linear_pixel, r, g, bl, alpha8);
     } else if (output == OUTPUT_NORMAL_RGB8) {
         // The planes hold raw bytes; decoding is linear so it commutes with the (normalized) filter.
         // Padding after the 3 channels is documented to be 255.
@@ -473,9 +519,10 @@ inline void write_output(uniform DownsampledImage* uniform dst, int b, uniform i
 // `planes` is the number of planes per source column; `scale` maps source units to 0..1.
 inline void horizontal_pass(uniform DownsampledImage* uniform dst, uniform const WeightCollection* uniform weights,
     uniform int y0, uniform int rows, uniform const float* uniform block, uniform int planes, uniform int output_channels,
-    uniform OutputKind output, const uniform uint8* uniform srgb_encode, uniform float scale) {
+    uniform OutputKind output, const uniform uint8* uniform srgb_encode, uniform float scale,
+    uniform uint8* uniform linear, uniform uint64 linear_pitch) {
     uniform const int B = block_rows();
-    uniform const uint64 row_pitch = (uint64)dst->width * dst->pixel_stride;
+    uniform const uint64 row_pitch = dst->row_pitch;
     for (uniform uint32 xo = 0; xo < dst->width; xo++) {
         uniform uint32 start = weights->starts[xo];
         uniform uint32 count = weights->weight_counts[xo];
@@ -515,13 +562,13 @@ inline void horizontal_pass(uniform DownsampledImage* uniform dst, uniform const
         }
         // Full blocks (all but the last) need no mask, which keeps the stores simple.
         if (rows == B) {
-            write_output(dst, programIndex, y0, xo, row_pitch, s0, s1, s2, s3, s4, s5, s6, output_channels, output, srgb_encode, scale);
-            write_output(dst, programIndex + b_half, y0, xo, row_pitch, t0, t1, t2, t3, t4, t5, t6, output_channels, output, srgb_encode, scale);
+            write_output(dst, programIndex, y0, xo, row_pitch, s0, s1, s2, s3, s4, s5, s6, output_channels, output, srgb_encode, scale, linear, linear_pitch);
+            write_output(dst, programIndex + b_half, y0, xo, row_pitch, t0, t1, t2, t3, t4, t5, t6, output_channels, output, srgb_encode, scale, linear, linear_pitch);
         } else {
             if (programIndex < rows)
-                write_output(dst, programIndex, y0, xo, row_pitch, s0, s1, s2, s3, s4, s5, s6, output_channels, output, srgb_encode, scale);
+                write_output(dst, programIndex, y0, xo, row_pitch, s0, s1, s2, s3, s4, s5, s6, output_channels, output, srgb_encode, scale, linear, linear_pitch);
             if (programIndex + b_half < rows)
-                write_output(dst, programIndex + b_half, y0, xo, row_pitch, t0, t1, t2, t3, t4, t5, t6, output_channels, output, srgb_encode, scale);
+                write_output(dst, programIndex + b_half, y0, xo, row_pitch, t0, t1, t2, t3, t4, t5, t6, output_channels, output, srgb_encode, scale, linear, linear_pitch);
         }
     }
 }
@@ -571,7 +618,8 @@ inline void resample(uniform const SourceImage* uniform src, uniform Downsampled
     for (uniform int y0 = 0; y0 < dst->height; y0 += B) {
         uniform int rows = min(B, (uniform int)dst->height - y0);
         vertical_pass(src, ctx->weights.vertical_weights, y0, rows, block, union_weights, kind, channels, cache);
-        horizontal_pass(dst, ctx->weights.horizontal_weights, y0, rows, block, planes, output_channels, output, srgb ? ctx->srgb_encode : NULL, scale);
+        horizontal_pass(dst, ctx->weights.horizontal_weights, y0, rows, block, planes, output_channels, output,
+            srgb ? ctx->srgb_encode : NULL, scale, srgb ? (uniform uint8* uniform)ctx->linear : NULL, ctx->linear_row_pitch);
     }
     delete[] block;
     delete[] union_weights;
@@ -606,6 +654,15 @@ export void resample_with_cached_weights_4_alpha_weighted(const uniform SourceIm
         resample(src, dst, ctx, SOURCE_ALPHA_WEIGHTED_SRGB8, 4, 8, 4, OUTPUT_ALBEDO_ALPHA_WEIGHTED, true, 1.0f);
     else
         resample(src, dst, ctx, SOURCE_ALPHA_WEIGHTED_U8, 4, 8, 4, OUTPUT_ALBEDO_ALPHA_WEIGHTED, false, 1.0f / 255.0f);
+}
+
+/// sRGB RGBA from 16-bit linear RGBA, the next level of a mip chain.
+export void resample_linear16(const uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst,
+    uniform DownsamplingContext * uniform ctx, uniform bool alpha_weighted) {
+    if (alpha_weighted)
+        resample(src, dst, ctx, SOURCE_ALPHA_WEIGHTED_LINEAR16, 4, 8, 4, OUTPUT_ALBEDO_ALPHA_WEIGHTED, true, 1.0f);
+    else
+        resample(src, dst, ctx, SOURCE_FLAT_LINEAR16, 4, 4, 4, OUTPUT_ALBEDO, true, 1.0f);
 }
 
 /// Box filters a normal map with the (normalized) box weights in `ctx`, and renormalizes the result.
@@ -753,9 +810,9 @@ inline void normal_map_2x2(const uniform SourceImage* uniform src, uniform Downs
     uniform uint32 whole = width / programCount * programCount;
 
     for (uniform uint32 yo = 0; yo < dst->height; yo++) {
-        const uniform uint8* uniform top = src->data + (uint64)(2 * yo) * src->width * stride;
-        const uniform uint8* uniform bottom = top + src->width * stride;
-        uniform uint8* uniform out = dst->data + (uint64)yo * width * pixel_size;
+        const uniform uint8* uniform top = src->data + (uint64)(2 * yo) * src->row_pitch;
+        const uniform uint8* uniform bottom = top + src->row_pitch;
+        uniform uint8* uniform out = dst->data + (uint64)yo * dst->row_pitch;
 
         if (normal_map_format == R8g8b8 && stride == 3) {
             // Whole groups of 2 * programCount output texels, in three short loops over the row rather than one
