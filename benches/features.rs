@@ -299,7 +299,9 @@ fn mip_chains(c: &mut Criterion) {
     let (levels, mips_size) = mip_layout(size, size, 4);
     let mut mips = vec![0u8; mips_size];
     let rgbx: Vec<u8> = rgb
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .flat_map(|p| [p[0], p[1], p[2], 255])
         .collect();
     let weighted = MipOptions {

@@ -93,7 +93,10 @@ fn reference_chain(
             downsample_with_custom_scale(&image, level.width, level.height, options.filter_scale)
         };
         if format.num_channel_in_memory() == 3 {
-            next.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+            next.as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .for_each(|p| p[3] = 255);
         }
         let cutoff = match options.alpha_coverage {
             AlphaCoverage::Unchanged => None,
@@ -320,7 +323,9 @@ fn float_step(src: &[[f64; 3]], size: usize) -> Vec<[f64; 3]> {
 fn srgb_mips_match_an_unrounded_chain() {
     let size = 256;
     let rgba: Vec<u8> = noise(size * size * 4, 3)
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| [p[0], p[1] / 2 + 64, p[2] / 4 + 16, 255])
         .collect();
     let (levels, total) = mip_layout(size as u32, size as u32, 4);
@@ -331,7 +336,9 @@ fn srgb_mips_match_an_unrounded_chain() {
     let chained = reference_chain(&rgba, &levels, AlbedoFormat::Srgba8, &options);
 
     let mut exact: Vec<[f64; 3]> = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| [0, 1, 2].map(|c| srgb_to_linear(p[c])))
         .collect();
     for (k, level) in levels.iter().enumerate().skip(1).take(4) {
@@ -341,8 +348,10 @@ fn srgb_mips_match_an_unrounded_chain() {
             .flat_map(|p| p.map(|l| linear_to_srgb(l).round() as u8))
             .collect();
         let off = |rgba: &[u8]| {
-            rgba.chunks_exact(4)
-                .zip(rounded.chunks_exact(3))
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .zip(rounded.as_chunks::<3>().0)
                 .filter(|(a, b)| a[..3] != **b)
                 .count() as f64
                 / rounded.len() as f64
@@ -384,8 +393,10 @@ fn flat_srgb_mips_stay_flat() {
         for level in &levels {
             assert!(
                 read_level(&output, level, 4)
-                    .chunks_exact(4)
-                    .all(|p| p == [value, value, value, 255]),
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|p| *p == [value, value, value, 255]),
                 "{value} changed at {}x{}",
                 level.width,
                 level.height

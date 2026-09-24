@@ -887,7 +887,12 @@ pub fn generate_mips(
                     let row = &output[y * level.row_pitch..][..level.width as usize * 4];
                     let linear_row =
                         &mut write[y * level.width as usize * 4..][..level.width as usize * 4];
-                    for (texel, alpha) in linear_row.chunks_exact_mut(4).zip(row.chunks_exact(4)) {
+                    for (texel, alpha) in linear_row
+                        .as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .zip(row.as_chunks::<4>().0)
+                    {
                         texel[3] = alpha[3] as u16 * 257;
                     }
                 }
