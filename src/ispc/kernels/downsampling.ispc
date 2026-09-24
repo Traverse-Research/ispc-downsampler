@@ -66,7 +66,9 @@ inline uniform int block_rows() {
 }
 
 inline float decode_snorm8(float value) {
-    return value * (2.0f / 255.0f) - 1.0f;
+    // Subtract first, which is exact: `value * (2 / 255) - 1` cancels near 128 and leaves small components with
+    // enough error to round texels near a boundary the wrong way.
+    return (value - 127.5f) * (1.0f / 127.5f);
 }
 
 // Stores v0..v3, the values of block rows b .. b + 3, for the element `e` of every active lane. They are contiguous
@@ -393,11 +395,23 @@ inline uint32 pack_rgb(float r, float g, float b, const uniform uint8* uniform s
     return to_unorm8(r) | (to_unorm8(g) << 8) | (to_unorm8(b) << 16);
 }
 
+// 1 / sqrt(v) to ~23 bits: the hardware estimate plus one Newton step. The estimate alone (~12 bits) is off by up
+// to 0.05 of an 8-bit step, which rounds differently in up to 15% of texels and compounds down a mip chain.
+inline float rsqrt_precise(float v) {
+    float r = rsqrt_fast(v);
+    return r * (1.5f - 0.5f * v * r * r);
+}
+
+// A unit length component to its rounded unorm byte, `x * 127.5 + 127.5` rounded. Scaling first and adding 128 once
+// rounds only at the add: `x * 0.5 + 0.5` then `* 255` rounds twice, and flips texels that are within a float step
+// of a rounding boundary (flat areas of normal maps are full of them).
+inline uint32 normal_to_unorm8(float scaled) {
+    return (int32)min(scaled + 128.0f, 255.0f);
+}
+
 inline uint32 pack_normal(float x, float y, float z) {
-    // The hardware estimate (~12 bits) is far more precise than the 8-bit output, so skip the Newton step.
-    float inv_length = rsqrt_fast(x * x + y * y + z * z);
-    return to_unorm8(x * inv_length * 0.5f + 0.5f) | (to_unorm8(y * inv_length * 0.5f + 0.5f) << 8)
-        | (to_unorm8(z * inv_length * 0.5f + 0.5f) << 16);
+    float scale = rsqrt_precise(x * x + y * y + z * z) * 127.5f;
+    return normal_to_unorm8(x * scale) | (normal_to_unorm8(y * scale) << 8) | (normal_to_unorm8(z * scale) << 16);
 }
 
 // Stores the low `size` bytes of `packed` (4 bytes per channel slot, the rest padding) in one go where possible.
@@ -611,8 +625,8 @@ inline void normal_map_2x2(const uniform SourceImage* uniform src, uniform Downs
                     y += (float)(int32)((texels[k] >> 8) & 0xFF);
                     z += (float)(int32)((texels[k] >> 16) & 0xFF);
                 }
-                uniform const float to_snorm = 2.0f / (4.0f * 255.0f);
-                out_row[xo] = pack_normal(x * to_snorm - 1.0f, y * to_snorm - 1.0f, z * to_snorm - 1.0f) | 0xFF000000;
+                // Normalizing ignores scale, so the sums minus their midpoint (4 * 127.5) are the direction, exactly.
+                out_row[xo] = pack_normal(x - 510.0f, y - 510.0f, z - 510.0f) | 0xFF000000;
             }
         }
     } else if (normal_map_format == R8g8b8) {
