@@ -32,31 +32,6 @@ inline float<4> sample_4_channels(const uniform uint8* varying pixel_ptr, unifor
     return dst;
 }
 
-inline float<3> sample_3_channels_srgb(const uniform uint8* varying pixel_ptr, const uniform SrgbToLinearLut * uniform lut) {
-    const uniform uint8<3>* pixel_ptr3 = (const uniform uint8<3>*)(pixel_ptr);
-    uint8<3> srgb = *pixel_ptr3;
-    float<3> dst = {lut->values[srgb.x], lut->values[srgb.y], lut->values[srgb.z]};
-    return dst;
-}
-
-inline float<4> sample_4_channels_srgb(const uniform uint8* varying pixel_ptr, const uniform SrgbToLinearLut * uniform lut) {
-    const uniform uint8<4>* pixel_ptr4 = (const uniform uint8<4>*)(pixel_ptr);
-    uint8<4> srgb = *pixel_ptr4;
-    // Alpha is not sRGB-encoded
-    float<4> dst = {lut->values[srgb.x], lut->values[srgb.y], lut->values[srgb.z], srgb.w / 255.0f};
-    return dst;
-}
-
-inline float<3> sample_3_channels(const uniform float* varying pixel_ptr) {
-    const uniform float<3>* pixel_ptr3 = (const uniform float<3>*)(pixel_ptr);
-    return *pixel_ptr3;
-}
-
-inline float<4> sample_4_channels(const uniform float* varying pixel_ptr) {
-    const uniform float<4>* pixel_ptr4 = (const uniform float<4>*)(pixel_ptr);
-    return *pixel_ptr4;
-}
-
 inline float<3> sample_normal(const uniform uint8* varying pixel_ptr, uniform NormalMapFormat normal_map_format) {
     float<3> normal = {0.0f, 0.0f, 0.0f};
     switch (normal_map_format) {
@@ -210,55 +185,6 @@ inline float<4> resolve_4_channels(varying float<4> color, varying float<3> unwe
     return color;
 }
 
-/// Horizontal pass of `resample_with_cached_weights()` for sRGB-encoded source images, which are
-/// decoded to linear space before filtering. Every source pixel is visited by multiple filter taps,
-/// so each row is decoded once up-front into `ctx->linear_row` rather than for every tap.
-inline void horizontal_pass_srgb(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx, uniform bool alpha_weighted) {
-    uniform WeightCollection * uniform horizontal_weight_collection = ctx->weights.horizontal_weights;
-    const uniform uint num_channels = channel_count(pixel_format);
-    const uniform uint scratch_channels = scratch_channel_count(pixel_format, alpha_weighted);
-
-    uniform SrgbToLinearLut srgb_to_linear_lut;
-    init_srgb_to_linear_lut(&srgb_to_linear_lut);
-
-    for (uniform uint32 y = 0; y < src->height; y++) {
-        foreach (x = 0 ... src->width) {
-            uint64 src_read_address = ((uint64)y * src->width + x) * src->pixel_stride;
-
-            if (channel_count(pixel_format) == 3)
-                write_3_channels(sample_3_channels_srgb(src->data + src_read_address, &srgb_to_linear_lut), ctx->linear_row + x * num_channels);
-            if (channel_count(pixel_format) == 4)
-                write_4_channels(sample_4_channels_srgb(src->data + src_read_address, &srgb_to_linear_lut), ctx->linear_row + x * num_channels);
-        }
-
-        foreach (x = 0 ... dst->width) {
-            uint32 src_width_start = horizontal_weight_collection->starts[x];
-            uint32 num_horizontal_weights = horizontal_weight_collection->weight_counts[x];
-            float* horizontal_weights = horizontal_weight_collection->values[x];
-
-            float<3> color3 = {0.0f, 0.0f, 0.0f};
-            float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
-            float<3> unweighted = {0.0f, 0.0f, 0.0f};
-            for (uint32 i = 0; i < num_horizontal_weights; i++) {
-                float weight = horizontal_weights[i];
-                uint32 src_x = src_width_start + i;
-
-                if (channel_count(pixel_format) == 3)
-                    color3 += sample_3_channels(ctx->linear_row + src_x * num_channels) * weight;
-                if (channel_count(pixel_format) == 4)
-                    accumulate_4_channels(color4, unweighted, sample_4_channels(ctx->linear_row + src_x * num_channels), weight, alpha_weighted);
-            }
-
-            uint64 scratch_write_address = (y * dst->width + x) * scratch_channels;
-
-            if (channel_count(pixel_format) == 3)
-                write_3_channels(color3, ctx->scratch_space + scratch_write_address);
-            if (channel_count(pixel_format) == 4)
-                write_4_channels_to_scratch(color4, unweighted, ctx->scratch_space + scratch_write_address, alpha_weighted);
-        }
-    }
-}
-
 inline void resample_with_cached_weights(uniform SourceImage * uniform src, uniform DownsampledImage * uniform dst, uniform PixelFormat pixel_format, uniform DownsamplingContext * uniform ctx, uniform bool alpha_weighted) {
     uniform WeightCollection * uniform vertical_weight_collection = ctx->weights.vertical_weights;
     uniform WeightCollection * uniform horizontal_weight_collection = ctx->weights.horizontal_weights;
@@ -271,35 +197,20 @@ inline void resample_with_cached_weights(uniform SourceImage * uniform src, unif
 
     // Accumulate only along the width for each pixel, sampling from the source image
     // Results in the source image being downsampled to src->height X dst->width
-    // Filtering happens in linear space: sRGB inputs are decoded to linear in the horizontal pass,
-    // and encoded back to sRGB when writing the final result.
-    if (srgb) {
-        horizontal_pass_srgb(src, dst, pixel_format, ctx, alpha_weighted);
-    } else {
-        foreach_tiled(y =  0 ... src->height, x = 0 ... dst->width) {
+    foreach_tiled(y =  0 ... src->height, x = 0 ... dst->width) {
 
-            uint32 src_width_start = horizontal_weight_collection->starts[x];
-            uint32 num_horizontal_weights = horizontal_weight_collection->weight_counts[x];
-            float* horizontal_weights = horizontal_weight_collection->values[x];
+        uint32 src_width_start = horizontal_weight_collection->starts[x];
+        uint32 num_horizontal_weights = horizontal_weight_collection->weight_counts[x];
+        float* horizontal_weights = horizontal_weight_collection->values[x];
 
-            float<3> color3 = {0.0f, 0.0f, 0.0f};
-            float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
-            float<3> unweighted = {0.0f, 0.0f, 0.0f};
-            for (uint32 i = 0; i < num_horizontal_weights; i++) {
-                float weight = horizontal_weights[i];
-                uint32 src_x = src_width_start + i;
-                uint64 src_read_address = (y * src->width + src_x) * src->pixel_stride;
+        float<3> color3 = {0.0f, 0.0f, 0.0f};
+        float<4> color4 = {0.0f, 0.0f, 0.0f, 0.0f};
+        float<3> unweighted = {0.0f, 0.0f, 0.0f};
+        for (uint32 i = 0; i < num_horizontal_weights; i++) {
+            float weight = horizontal_weights[i];
+            uint32 src_x = src_width_start + i;
+            uint64 src_read_address = (y * src->width + src_x) * src->pixel_stride;
 
-                if (channel_count(pixel_format) == 3)
-                    color3 += sample_3_channels(src->data + src_read_address) * weight;
-                if (channel_count(pixel_format) == 4)
-                    accumulate_4_channels(color4, unweighted, sample_4_channels(src->data + src_read_address), weight, alpha_weighted);
-            }
-
-            uint64 scratch_write_address = (y * dst->width + x) * scratch_channels;
-
-            // Keep the intermediate result in full precision, and don't clamp it yet: negative lobes of the
-            // filter are only cancelled out after the vertical pass.
             if (channel_count(pixel_format) == 3)
                 color3 += sample_3_channels(src->data + src_read_address, srgb) * weight;
             if (channel_count(pixel_format) == 4)

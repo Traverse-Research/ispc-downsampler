@@ -394,7 +394,6 @@ fn resample(
             &mut ispc::DownsamplingContext {
                 weights: *sample_weights.ispc_representation(),
                 scratch_space: scratch_space.as_mut_ptr(),
-                linear_row: linear_row.as_mut_ptr(),
             },
         );
     }

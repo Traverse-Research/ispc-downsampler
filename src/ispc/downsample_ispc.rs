@@ -262,7 +262,7 @@ fn bindgen_test_layout_DownsamplingContext() {
     let ptr = UNINIT.as_ptr();
     assert_eq!(
         ::std::mem::size_of::<DownsamplingContext>(),
-        32usize,
+        24usize,
         concat!("Size of: ", stringify!(DownsamplingContext))
     );
     assert_eq!(
@@ -288,16 +288,6 @@ fn bindgen_test_layout_DownsamplingContext() {
             stringify!(DownsamplingContext),
             "::",
             stringify!(scratch_space)
-        )
-    );
-    assert_eq!(
-        unsafe { ::std::ptr::addr_of!((*ptr).linear_row) as usize - ptr as usize },
-        24usize,
-        concat!(
-            "Offset of field: ",
-            stringify!(DownsamplingContext),
-            "::",
-            stringify!(linear_row)
         )
     );
 }
