@@ -1,37 +1,26 @@
-float srgb_to_linear(uint8 srgb) {
-    return pow(((float)srgb / 255.0), 2.2f);
+#pragma once
+
+// sRGB transfer functions as specified by IEC 61966-2-1, operating on normalized [0, 1] values.
+
+inline uniform float srgb_to_linear(uniform float srgb) {
+    if (srgb <= 0.04045f)
+        return srgb / 12.92f;
+    return pow((srgb + 0.055f) / 1.055f, 2.4f);
 }
 
-uint8 linear_to_srgb(float linear) {
-    return (uint8)(pow(linear, 1.0f / 2.2f) * 255.0f);
+inline varying float linear_to_srgb(varying float linear) {
+    if (linear <= 0.0031308f)
+        return linear * 12.92f;
+    return 1.055f * pow(linear, 1.0f / 2.4f) - 0.055f;
 }
 
-export void linearize(uniform uint width, uniform uint height, uniform uint row_pitch_in_bytes, uniform uint8 num_channels, uniform const uint8 src_data[], uniform uint8 out_data[]) {
-    // Assumes we always have 8-bit channels
-    const uniform int CHANNEL_SIZE = 1;
-    uniform int pixel_stride = num_channels * CHANNEL_SIZE;
-    foreach(halfX = 0 ... width, halfY = 0 ... height) {
-        int x = halfX;
-        int y = halfY;
-        int linear_index = y * row_pitch_in_bytes + x * num_channels;
+// Lookup table to convert 8-bit sRGB-encoded values to normalized linear values.
+// Much cheaper than calling `pow()` for every filter tap.
+struct SrgbToLinearLut {
+    uniform float values[256];
+};
 
-        for (int channel = 0; channel < num_channels; channel++) {
-            int byte_offset = (linear_index + channel) * CHANNEL_SIZE;
-            int s_indices[1] = { byte_offset };
-            // int s_indices[4] = { byte_offset, byte_offset + pixel_stride, byte_offset + row_pitch_in_bytes, byte_offset + pixel_stride + row_pitch_in_bytes };
-
-            float sample = 0.0f;
-            for (int i = 0; i < 1; i++) {
-                sample += srgb_to_linear(src_data[s_indices[i]]);
-            }
-
-            out_data[s_indices[0]] = (uint8)(sample * 255.0f);
-            // sample /= 4.0f;
-            // float srgb_sample = linear_to_srgb(sample);
-            // for (int i = 0; i < 1; i++) {
-            //     out_data[s_indices[i]] = srgb_sample;
-
-            // }
-        }
-    }
+inline void init_srgb_to_linear_lut(uniform SrgbToLinearLut * uniform lut) {
+    for (uniform int i = 0; i < 256; i++)
+        lut->values[i] = srgb_to_linear((uniform float)i / 255.0f);
 }
